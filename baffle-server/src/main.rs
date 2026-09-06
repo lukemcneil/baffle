@@ -53,6 +53,10 @@ async fn game_socket(
     ws.channel(move |mut stream| Box::pin(async move {
         let sender;
         let seat = { let mut all = rooms.lock().await; let room = all.0.entry(code.clone()).or_insert_with(|| { let (tx, _) = broadcast::channel(16); Room { state: GameState::new(8), sender: tx, last_activity: Instant::now(), rematch_code: None } }); match room.state.join(&player) { Ok(seat) => { room.last_activity = Instant::now(); sender = room.sender.clone(); seat }, Err(err) => { let _ = stream.send(Message::Text(format!("{{\"Err\":\"{}\"}}", err))).await; return Ok(()); } } };
+        // Notify every already-connected player in the room. The joining
+        // player gets the initial snapshot below, so this broadcast is for
+        // the host and other waiting players.
+        let _ = sender.send(());
         let _ = lobby_sender.send(());
         let mut updates = sender.subscribe();
         if let Some(room) = rooms.lock().await.0.get(&code) { let _ = stream.send(Message::Text(snapshot(&room.state, seat))).await; }
