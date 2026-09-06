@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#11182e">
+  <title>Baffle</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="noise"></div>
+  <main id="app">
+    <section id="lobby" class="screen">
+      <div class="lobby-hero">
+        <div class="brand-mark" aria-hidden="true"><span>B</span><span>!</span></div>
+        <p class="eyebrow">A multiplayer word hunt</p>
+        <h1>Baf<em>fle</em></h1>
+        <p class="hero-copy">Find the words hiding in plain sight.<br>Outsmart the grid. Outscore your friends.</p>
+      </div>
+      <div class="panel lobby-panel">
+        <div class="panel-topline"><span class="live-dot"></span> Ready when you are</div>
+        <label for="player-name">Your name</label>
+        <input id="player-name" maxlength="20" autocomplete="nickname" placeholder="e.g. Wordy McWordface">
+        <button id="create-btn" class="primary-button">Create a room <span>↗</span></button>
+        <div class="join-divider"><span>or join a room</span></div>
+        <div class="join-row">
+          <input id="room-code" maxlength="4" autocapitalize="characters" placeholder="CODE" aria-label="Room code">
+          <button id="join-btn" class="secondary-button">Join</button>
+        </div>
+        <p id="lobby-status" class="status-message" role="status"></p>
+        <div id="active-games" class="open-games">
+          <div class="section-kicker">Open rooms</div>
+          <div id="active-games-list"></div>
+        </div>
+      </div>
+      <div class="lobby-footer"><span>3+ letters</span><i>•</i><span>no repeats</span><i>•</i><span>all bragging rights</span></div>
+    </section>
+
+    <section id="waiting-room" class="screen hidden">
+      <div class="waiting-shell">
+        <div class="top-brand"><div class="mini-mark">B<span>!</span></div><span>Baffle</span></div>
+        <div class="waiting-grid">
+          <div>
+            <p class="eyebrow">Room created</p>
+            <h2>Gather your<br><em>word nerds.</em></h2>
+            <p class="muted-copy">Share this code with your crew. The grid is waiting.</p>
+            <div class="room-code-card"><span id="room-code-display">----</span><button id="copy-link-btn" title="Copy invite link">Copy invite link</button></div>
+          </div>
+          <div class="panel setup-panel">
+            <div class="section-kicker">Players <span id="player-count">0/8</span></div>
+            <div id="waiting-players" class="waiting-players"></div>
+            <div class="setup-divider"></div>
+            <label class="section-kicker" for="mode-select">Choose your flavor</label>
+            <select id="mode-select">
+              <option value="classic">Classic · 3 minutes · 4×4</option>
+              <option value="blitz">Blitz · 60 seconds · 4×4</option>
+              <option value="mega">Mega Grid · 3 minutes · 5×5</option>
+            </select>
+            <div id="mode-description" class="mode-description">The original pressure cooker. Plenty of time for a big score.</div>
+            <button id="start-btn" class="primary-button">Start the hunt <span>→</span></button>
+            <p id="waiting-hint" class="hint">You are the host. Start when everyone is ready.</p>
+          </div>
+        </div>
+        <button id="back-to-lobby-btn" class="text-button">← Leave room</button>
+      </div>
+    </section>
+
+    <section id="game-screen" class="screen hidden">
+      <header class="game-header">
+        <div class="top-brand"><div class="mini-mark">B<span>!</span></div><span>Baffle</span></div>
+        <div class="game-meta"><span id="game-mode-pill" class="mode-pill">CLASSIC</span><span class="room-label">ROOM <strong id="game-room-code">----</strong></span></div>
+        <div id="connection-state" class="connection-state"><span class="live-dot"></span> Live</div>
+      </header>
+      <div class="game-layout">
+        <aside class="score-panel panel">
+          <div class="timer-block"><div class="section-kicker">Time left</div><div id="timer" class="timer">3:00</div><div class="timer-track"><span id="timer-bar"></span></div></div>
+          <div class="players-heading"><span class="section-kicker">Scoreboard</span><span id="live-player-count" class="player-count-label"></span></div>
+          <div id="scoreboard"></div>
+          <div class="tip-card"><span class="tip-icon">✦</span><div><strong>Quick tip</strong><p>Longer words are worth more. A 7-letter word is a five-point bear hug.</p></div></div>
+        </aside>
+        <div class="board-column">
+          <div class="game-intro"><div><p class="eyebrow" id="game-eyebrow">Your move</p><h2>Hunt the hidden words.</h2></div><div class="round-badge"><span id="found-count">0</span><small>found</small></div></div>
+          <div id="board" class="board" aria-label="Letter board"></div>
+          <div class="word-dock">
+            <div class="current-word-wrap"><span class="section-kicker">Your word</span><div id="current-word" class="current-word">Tap letters to begin<span class="cursor"></span></div></div>
+            <div class="word-actions"><button id="clear-btn" class="secondary-button">Clear</button><button id="submit-btn" class="primary-button" disabled>Submit word <span>↗</span></button></div>
+          </div>
+          <div id="toast" class="toast" role="status"></div>
+        </div>
+        <aside class="finds-panel panel"><div class="finds-heading"><div><p class="section-kicker">Your finds</p><h3 id="your-score">0 <small>pts</small></h3></div><span id="streak-badge" class="streak-badge hidden">🔥 0 streak</span></div><div id="word-list" class="word-list"><p class="empty-finds">Your first find is hiding in there.</p></div><div class="rules-note"><span>HOW TO PLAY</span><p>Trace letters in any direction. Neighboring tiles only. No tile twice.</p><button id="rules-btn" class="text-button">Read the rules →</button></div></aside>
+      </div>
+    </section>
+
+    <section id="game-over" class="screen hidden">
+      <div class="results-shell">
+        <div class="top-brand"><div class="mini-mark">B<span>!</span></div><span>Baffle</span></div>
+        <div class="results-title"><p class="eyebrow">The grid has spoken</p><h2 id="results-headline">Nice work, wordsmiths.</h2><p id="results-subtitle" class="muted-copy"></p></div>
+        <div id="final-scoreboard" class="final-scoreboard"></div>
+        <div class="results-actions"><button id="rematch-btn" class="primary-button">Run it back <span>↗</span></button><button id="results-lobby-btn" class="secondary-button">Back to lobby</button></div>
+      </div>
+    </section>
+  </main>
+  <div id="rules-modal" class="modal hidden"><div class="modal-card"><button id="close-rules-btn" class="modal-close">×</button><p class="eyebrow">The tiny rulebook</p><h2>How to play</h2><div class="rule-row"><span>01</span><p><strong>Trace a word.</strong> Tap neighboring letters—up, down, sideways, or diagonal.</p></div><div class="rule-row"><span>02</span><p><strong>Mind your paws.</strong> You cannot use the same tile twice in one word.</p></div><div class="rule-row"><span>03</span><p><strong>Score big.</strong> 3–4 letters score 1, then longer words climb fast.</p></div><div class="rule-row"><span>04</span><p><strong>Race together.</strong> Everyone hunts the same grid. First to find it does not matter—your score does.</p></div></div></div>
+  <script src="dist/game.js"></script>
+</body>
+</html>
