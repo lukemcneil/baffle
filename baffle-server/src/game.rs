@@ -228,7 +228,7 @@ impl GameState {
             });
         }
         let word = raw_word.trim().to_ascii_uppercase();
-        if word.len() < 3 || word.len() > 12 || !word.bytes().all(|b| b.is_ascii_alphabetic()) {
+        if word.len() < 3 || word.len() > 25 || !word.bytes().all(|b| b.is_ascii_alphabetic()) {
             return Err(ActionError::InvalidWord);
         }
         let player = self.players.get_mut(seat).ok_or(ActionError::InvalidSeat)?;

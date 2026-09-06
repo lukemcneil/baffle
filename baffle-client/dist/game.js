@@ -55,7 +55,7 @@ function connect(code) {
     socket.addEventListener('message', event => {
         const message = JSON.parse(event.data);
         if ('Err' in message) {
-            const labels = { RoomFull: 'That room is full.', GameAlreadyStarted: 'That game has already started.', NotHost: 'Only the host can start the game.', NotEnoughPlayers: 'Add at least one player first.', NotAWord: 'That one is not in my dictionary.', NotOnBoard: 'Those letters are not connected on the grid.', DuplicateWord: 'You already found that one.', InvalidWord: 'Words need 3–12 letters.', GameOver: 'Time is up!' };
+            const labels = { RoomFull: 'That room is full.', GameAlreadyStarted: 'That game has already started.', NotHost: 'Only the host can start the game.', NotEnoughPlayers: 'Add at least one player first.', NotAWord: 'That one is not in my dictionary.', NotOnBoard: 'Those letters are not connected on the grid.', DuplicateWord: 'You already found that one.', InvalidWord: 'Words need 3–25 letters.', GameOver: 'Time is up!' };
             if (state?.phase === 'playing')
                 showToast(labels[message.Err] || `Could not do that: ${message.Err}`, true);
             else
