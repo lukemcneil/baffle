@@ -35,12 +35,18 @@ pub struct Board {
     pub letters: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct FoundWord {
+    pub word: String,
+    pub points: u32,
+}
+
 #[derive(Debug, Clone)]
 pub struct Player {
     pub seat: usize,
     pub name: String,
     pub score: u32,
-    pub words: Vec<String>,
+    pub words: Vec<FoundWord>,
     pub streak: u32,
     pub connected: bool,
     connection_id: u64,
@@ -75,7 +81,7 @@ pub struct ClientState {
     pub ends_at_ms: Option<u64>,
     pub my_seat: usize,
     pub my_score: u32,
-    pub my_words: Vec<String>,
+    pub my_words: Vec<FoundWord>,
     pub my_streak: u32,
     pub players: Vec<ClientPlayer>,
 }
@@ -88,6 +94,7 @@ pub struct ClientPlayer {
     pub word_count: usize,
     pub connected: bool,
     pub is_me: bool,
+    pub words: Option<Vec<FoundWord>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -246,7 +253,7 @@ impl GameState {
             return Err(ActionError::InvalidWord);
         }
         let player = self.players.get_mut(seat).ok_or(ActionError::InvalidSeat)?;
-        if player.words.iter().any(|w| w == &word) {
+        if player.words.iter().any(|found| found.word == word) {
             return Err(ActionError::DuplicateWord);
         }
         let board = self.board.as_ref().ok_or(ActionError::WrongPhase)?;
@@ -267,7 +274,7 @@ impl GameState {
         let combo = if player.streak >= 3 { 1 } else { 0 };
         let points = base + combo;
         player.score += points;
-        player.words.push(word);
+        player.words.push(FoundWord { word, points });
         Ok(points)
     }
 
@@ -297,6 +304,7 @@ impl GameState {
                     word_count: p.words.len(),
                     connected: p.connected,
                     is_me: p.seat == my_seat,
+                    words: (self.phase == Phase::GameOver).then(|| p.words.clone()),
                 })
                 .collect(),
         }
@@ -391,6 +399,29 @@ mod tests {
             game.submit_word(seat, "SUE"),
             Err(ActionError::DuplicateWord)
         ));
+        assert_eq!(game.players[seat].words[0].word, "SUE");
+        assert_eq!(game.players[seat].words[0].points, 1);
+    }
+
+    #[test]
+    fn game_over_payload_includes_word_scores_for_recap() {
+        let mut game = GameState::new(2);
+        let (seat, _) = game.join("Tester").unwrap();
+        let (other_seat, _) = game.join("Wife").unwrap();
+        game.start(seat, Mode::Blitz).unwrap();
+        game.board = Some(Board {
+            size: 2,
+            letters: vec!["S".into(), "U".into(), "E".into(), "X".into()],
+        });
+        game.submit_word(seat, "SUE").unwrap();
+        game.submit_word(other_seat, "SUE").unwrap();
+        game.ends_at = Some(Instant::now() - Duration::from_secs(1));
+        assert!(game.tick());
+        let client = game.to_client_state(seat);
+        assert_eq!(client.my_words[0].word, "SUE");
+        assert_eq!(client.my_words[0].points, 1);
+        assert_eq!(client.players[0].words.as_ref().unwrap()[0].word, "SUE");
+        assert_eq!(client.players[1].words.as_ref().unwrap()[0].points, 1);
     }
 
     #[test]

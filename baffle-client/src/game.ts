@@ -2,8 +2,9 @@ type Mode = 'classic' | 'blitz' | 'mega';
 type Phase = 'waiting' | 'playing' | 'game_over';
 
 interface Board { size: number; letters: string[]; }
-interface Player { seat: number; name: string; score: number; word_count: number; connected: boolean; is_me: boolean; }
-interface GameState { phase: Phase; mode: Mode; board: Board | null; duration_secs: number; ends_at_ms: number | null; my_seat: number; my_score: number; my_words: string[]; my_streak: number; players: Player[]; }
+interface FoundWord { word: string; points: number; }
+interface Player { seat: number; name: string; score: number; word_count: number; connected: boolean; is_me: boolean; words?: FoundWord[]; }
+interface GameState { phase: Phase; mode: Mode; board: Board | null; duration_secs: number; ends_at_ms: number | null; my_seat: number; my_score: number; my_words: FoundWord[]; my_streak: number; players: Player[]; }
 interface Room { code: string; players: string[]; player_count: number; max_players: number; }
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
@@ -37,6 +38,8 @@ let toastHandle: number | null = null;
 let isDragging = false;
 let dragMoved = false;
 let dragPointerId: number | null = null;
+let lastPointerX = 0;
+let lastPointerY = 0;
 let clickGuardUntil = 0;
 let pendingWords: string[] = [];
 
@@ -182,32 +185,47 @@ function beginDrag(event: PointerEvent): void {
   isDragging = true;
   dragMoved = false;
   dragPointerId = event.pointerId;
+  lastPointerX = event.clientX;
+  lastPointerY = event.clientY;
   boardEl.setPointerCapture(event.pointerId);
   chooseTile(index);
   event.preventDefault();
 }
 
+function appendDragTile(index: number): void {
+  const last = selectedPath[selectedPath.length - 1];
+  if (index === last) return;
+  dragMoved = true;
+  if (!selectedPath.includes(index) && (last === undefined || isNeighbor(last, index, state?.board?.size || 4))) {
+    selectedPath.push(index);
+    renderBoard();
+  }
+}
+
 function moveDrag(event: PointerEvent): void {
   if (!isDragging || event.pointerId !== dragPointerId) return;
-  const index = tileAtPoint(event.clientX, event.clientY);
-  const last = selectedPath[selectedPath.length - 1];
-  if (index !== null && index !== last) {
-    dragMoved = true;
-    if (!selectedPath.includes(index) && (last === undefined || isNeighbor(last, index, state?.board?.size || 4))) {
-      selectedPath.push(index);
-      renderBoard();
-    }
+  const tile = boardEl.querySelector<HTMLButtonElement>('.tile');
+  const step = Math.max(8, (tile?.getBoundingClientRect().width || 48) * 0.25);
+  const distance = Math.hypot(event.clientX - lastPointerX, event.clientY - lastPointerY);
+  const samples = Math.max(1, Math.ceil(distance / step));
+  for (let sample = 1; sample <= samples; sample += 1) {
+    const progress = sample / samples;
+    const index = tileAtPoint(lastPointerX + (event.clientX - lastPointerX) * progress, lastPointerY + (event.clientY - lastPointerY) * progress);
+    if (index !== null) appendDragTile(index);
   }
+  lastPointerX = event.clientX;
+  lastPointerY = event.clientY;
   event.preventDefault();
 }
 
 function endDrag(event: PointerEvent): void {
   if (!isDragging || event.pointerId !== dragPointerId) return;
+  const cancelled = event.type === 'pointercancel';
   isDragging = false;
   clickGuardUntil = performance.now() + 300;
   if (boardEl.hasPointerCapture(event.pointerId)) boardEl.releasePointerCapture(event.pointerId);
-  if (dragMoved && selectedPath.length >= 3) submitSelectedWord();
-  else if (dragMoved) { selectedPath = []; renderBoard(); }
+  if (!cancelled && dragMoved && selectedPath.length >= 3) submitSelectedWord();
+  else if (cancelled || dragMoved) { selectedPath = []; renderBoard(); }
   dragPointerId = null;
 }
 
@@ -229,7 +247,7 @@ function renderFinds(): void {
   const streak = $('streak-badge'); streak.classList.toggle('hidden', state.my_streak < 3); streak.textContent = `🔥 ${state.my_streak} streak`;
   const list = $('word-list'); list.innerHTML = '';
   if (!state.my_words.length) { list.innerHTML = '<p class="empty-finds">Your first find is hiding in there.</p>'; return; }
-  [...state.my_words].reverse().forEach(word => { const chip = document.createElement('span'); chip.className = 'word-chip'; chip.textContent = word; list.appendChild(chip); });
+  [...state.my_words].reverse().forEach(found => { const chip = document.createElement('span'); chip.className = 'word-chip'; chip.innerHTML = `<span>${escapeHtml(found.word)}</span><b>+${found.points}</b>`; list.appendChild(chip); });
 }
 
 function updateTimer(): void {
@@ -239,6 +257,8 @@ function updateTimer(): void {
   $('timer').style.color = seconds <= 10 ? 'var(--coral)' : 'var(--cream)';
 }
 
+function pointsLabel(points: number): string { return `${points} point${points === 1 ? '' : 's'}`; }
+
 function renderGameOver(): void {
   if (!state) return;
   if (timerHandle !== null) { window.clearInterval(timerHandle); timerHandle = null; }
@@ -246,8 +266,15 @@ function renderGameOver(): void {
   const ordered = [...state.players].sort((a, b) => b.score - a.score); const winner = ordered[0];
   $('results-headline').textContent = winner?.is_me ? 'You baffled them all.' : `${winner?.name || 'Someone'} took the crown.`;
   $('results-subtitle').textContent = `${state.my_words.length} word${state.my_words.length === 1 ? '' : 's'} found by you · ${state.mode === 'mega' ? 'Mega Grid' : state.mode[0].toUpperCase() + state.mode.slice(1)}`;
+  const allFinds = ordered.flatMap(player => (player.words || []).map(found => ({ ...found, player })));
+  const longestLength = allFinds.reduce((longest, found) => Math.max(longest, found.word.length), 0);
+  const longestFinds = allFinds.filter(found => found.word.length === longestLength);
+  const longestLabel = longestFinds.length ? longestFinds.map(found => `${escapeHtml(found.word)} · ${escapeHtml(found.player.name)} (+${found.points})`).join(' · ') : 'No words found';
+  $('results-insights').innerHTML = `<div class="insight-card"><span>TOP SCORE</span><strong>${escapeHtml(winner?.name || '—')}</strong><small>${pointsLabel(winner?.score || 0)}</small></div><div class="insight-card longest"><span>LONGEST FIND</span><strong>${longestLabel}</strong><small>${longestFinds.length > 1 ? 'Tied for longest' : longestLength ? `${longestLength} letters` : 'Keep hunting'}</small></div><div class="insight-card"><span>WORDS FOUND</span><strong>${allFinds.length}</strong><small>Across ${ordered.length} player${ordered.length === 1 ? '' : 's'}</small></div>`;
   const scoreboard = $('final-scoreboard'); scoreboard.innerHTML = '';
-  ordered.forEach((player, index) => { const row = document.createElement('div'); row.className = `final-row${index === 0 ? ' winner' : ''}`; row.innerHTML = `<span class="final-rank">${index === 0 ? '★' : index + 1}</span><span class="avatar">${escapeHtml(player.name.slice(0, 1).toUpperCase())}</span><span class="final-name"><strong>${escapeHtml(player.name)}${player.is_me ? ' · you' : ''}</strong><small>${player.word_count} word${player.word_count === 1 ? '' : 's'} found</small></span><span class="final-score">${player.score} pts</span>`; scoreboard.appendChild(row); });
+  ordered.forEach((player, index) => { const row = document.createElement('div'); row.className = `final-row${index === 0 ? ' winner' : ''}`; row.innerHTML = `<span class="final-rank">${index === 0 ? '★' : index + 1}</span><span class="avatar">${escapeHtml(player.name.slice(0, 1).toUpperCase())}</span><span class="final-name"><strong>${escapeHtml(player.name)}${player.is_me ? ' · you' : ''}</strong><small>${player.word_count} word${player.word_count === 1 ? '' : 's'} found · ${pointsLabel(player.score)}</small></span><span class="final-score">${player.score} pts</span>`; scoreboard.appendChild(row); });
+  const wordGroups = $('results-word-groups'); wordGroups.innerHTML = '<p class="results-section-label">EVERYONE\'S FINDS</p>';
+  ordered.forEach(player => { const group = document.createElement('section'); group.className = 'results-word-group'; const words = player.words || []; group.innerHTML = `<div class="results-player-heading"><span class="avatar">${escapeHtml(player.name.slice(0, 1).toUpperCase())}</span><div><strong>${escapeHtml(player.name)}${player.is_me ? ' · you' : ''}</strong><small>${words.length} word${words.length === 1 ? '' : 's'} · ${pointsLabel(player.score)}</small></div></div>`; const wordsEl = document.createElement('div'); wordsEl.className = 'results-word-list'; if (!words.length) wordsEl.innerHTML = '<span class="no-results-words">No finds this round.</span>'; else words.forEach(found => { const chip = document.createElement('span'); chip.className = `results-word-chip${found.word.length === longestLength ? ' longest' : ''}`; chip.innerHTML = `<strong>${escapeHtml(found.word)}</strong><b>+${found.points}</b>${found.word.length === longestLength ? '<i>longest</i>' : ''}`; wordsEl.appendChild(chip); }); group.appendChild(wordsEl); wordGroups.appendChild(group); });
 }
 
 function showToast(message: string, error = false): void { if (toastHandle !== null) window.clearTimeout(toastHandle); toastEl.textContent = message; toastEl.className = `toast show${error ? ' error' : ''}`; toastHandle = window.setTimeout(() => { toastEl.className = 'toast'; }, 2200); }
@@ -271,6 +298,7 @@ boardEl.addEventListener('pointermove', moveDrag);
 boardEl.addEventListener('pointerup', endDrag);
 boardEl.addEventListener('pointercancel', endDrag);
 window.addEventListener('resize', drawPath);
+window.addEventListener('blur', () => { if (isDragging) { isDragging = false; dragPointerId = null; selectedPath = []; renderBoard(); } });
 
 const savedName = localStorage.getItem('baffle_name'); if (savedName) playerName.value = savedName;
 const inviteRoom = new URLSearchParams(location.search).get('room');
