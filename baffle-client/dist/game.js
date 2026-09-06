@@ -13,6 +13,9 @@ const startButton = $('start-btn');
 const modeSelect = $('mode-select');
 const modeDescription = $('mode-description');
 const boardEl = $('board');
+const boardWrap = $('board-wrap');
+const pathLines = $('path-lines');
+const selectionLine = $('selection-line');
 const currentWordEl = $('current-word');
 const submitButton = $('submit-btn');
 const toastEl = $('toast');
@@ -23,6 +26,11 @@ let currentRoom = '';
 let selectedPath = [];
 let timerHandle = null;
 let toastHandle = null;
+let isDragging = false;
+let dragMoved = false;
+let dragPointerId = null;
+let clickGuardUntil = 0;
+let pendingWord = '';
 function wsUrl(path) {
     const params = new URLSearchParams(location.search);
     const host = params.get('server') || location.host;
@@ -46,6 +54,8 @@ function connect(code) {
     }
     currentRoom = code.toUpperCase();
     localStorage.setItem('baffle_name', name);
+    localStorage.setItem('baffle_room', currentRoom);
+    location.hash = currentRoom;
     lobbyStatus.textContent = 'Joining the room…';
     if (socket)
         socket.close();
@@ -55,9 +65,16 @@ function connect(code) {
     socket.addEventListener('message', event => {
         const message = JSON.parse(event.data);
         if ('Err' in message) {
-            const labels = { RoomFull: 'That room is full.', GameAlreadyStarted: 'That game has already started.', NotHost: 'Only the host can start the game.', NotEnoughPlayers: 'Add at least one player first.', NotAWord: 'That one is not in my dictionary.', NotOnBoard: 'Those letters are not connected on the grid.', DuplicateWord: 'You already found that one.', InvalidWord: 'Words need 3–25 letters.', GameOver: 'Time is up!' };
-            if (state?.phase === 'playing')
+            const labels = { RoomFull: 'That room is full.', GameAlreadyStarted: 'That game has already started.', NotHost: 'Only the host can start the game.', NotEnoughPlayers: 'Add at least one player first.', NotAWord: 'That one is not in my dictionary.', NotOnBoard: 'Those letters are not connected on the grid.', DuplicateWord: 'Already found — try another!', InvalidWord: 'Words need 3–25 letters.', GameOver: 'Time is up!' };
+            if (state?.phase === 'playing') {
                 showToast(labels[message.Err] || `Could not do that: ${message.Err}`, true);
+                if (message.Err === 'DuplicateWord') {
+                    const finds = document.querySelector('.finds-panel');
+                    finds?.classList.remove('shake');
+                    void finds?.clientWidth;
+                    finds?.classList.add('shake');
+                }
+            }
             else
                 lobbyStatus.textContent = labels[message.Err] || `Could not do that: ${message.Err}`;
             if (message.Err === 'RoomExpired')
@@ -65,8 +82,9 @@ function connect(code) {
             return;
         }
         if ('word_accepted' in message) {
+            celebrateWord(pendingWord, message.points);
             showToast(`+${message.points} point${message.points === 1 ? '' : 's'} — nice find!`);
-            selectedPath = [];
+            pendingWord = '';
             return;
         }
         if ('rematch_code' in message) {
@@ -118,10 +136,10 @@ function renderWaiting() {
         return;
     showScreen(waitingRoom);
     $('room-code-display').textContent = currentRoom;
-    $('player-count').textContent = `${state.players.length}/${8}`;
+    $('player-count').textContent = `${state.players.filter(player => player.connected).length}/${8}`;
     const list = $('waiting-players');
     list.innerHTML = '';
-    state.players.forEach(player => { const item = document.createElement('div'); item.className = `waiting-player${player.seat === 0 ? ' host' : ''}`; item.textContent = `${player.name}${player.seat === 0 ? ' · host' : ''}`; list.appendChild(item); });
+    state.players.filter(player => player.connected).forEach(player => { const item = document.createElement('div'); item.className = `waiting-player${player.seat === 0 ? ' host' : ''}`; item.textContent = `${player.name}${player.seat === 0 ? ' · host' : ''}`; list.appendChild(item); });
     const isHost = state.my_seat === 0;
     startButton.disabled = !isHost;
     modeSelect.disabled = !isHost;
@@ -131,7 +149,7 @@ function renderGame() {
     if (!state || !state.board)
         return;
     showScreen(gameScreen);
-    toastEl.className = 'toast';
+    $('connection-state').innerHTML = '<span class="live-dot"></span> Live';
     $('game-room-code').textContent = currentRoom;
     $('game-mode-pill').textContent = state.mode === 'mega' ? 'MEGA GRID' : state.mode.toUpperCase();
     renderBoard();
@@ -153,15 +171,18 @@ function renderBoard() {
         tile.type = 'button';
         tile.className = 'tile';
         tile.textContent = letter;
+        tile.dataset.index = String(index);
         tile.dataset.order = String(selectedPath.indexOf(index) + 1);
         tile.setAttribute('aria-label', `Letter ${letter}, position ${index + 1}`);
         if (selectedPath.includes(index))
             tile.classList.add('selected');
-        tile.addEventListener('click', () => chooseTile(index));
+        tile.addEventListener('click', () => { if (performance.now() < clickGuardUntil)
+            return; chooseTile(index); });
         boardEl.appendChild(tile);
     });
-    currentWordEl.innerHTML = selectedPath.length ? selectedPath.map(index => board.letters[index]).join('') + '<span class="cursor"></span>' : 'Tap letters to begin<span class="cursor"></span>';
+    currentWordEl.innerHTML = selectedPath.length ? selectedPath.map(index => board.letters[index]).join('') + '<span class="cursor"></span>' : 'Drag letters to begin<span class="cursor"></span>';
     submitButton.disabled = selectedPath.length < 3;
+    drawPath();
 }
 function chooseTile(index) {
     if (!state?.board)
@@ -179,6 +200,31 @@ function chooseTile(index) {
     renderBoard();
 }
 function isNeighbor(a, b, size) { const ar = Math.floor(a / size), ac = a % size, br = Math.floor(b / size), bc = b % size; return Math.max(Math.abs(ar - br), Math.abs(ac - bc)) <= 1; }
+function tileAtPoint(x, y) { const element = document.elementFromPoint(x, y); const tile = element?.closest('.tile'); return tile ? Number(tile.dataset.index) : null; }
+function drawPath() {
+    if (!state?.board || !selectedPath.length) {
+        selectionLine.setAttribute('points', '');
+        return;
+    }
+    const wrapRect = boardWrap.getBoundingClientRect();
+    pathLines.setAttribute('viewBox', `0 0 ${wrapRect.width} ${wrapRect.height}`);
+    const points = selectedPath.map(index => { const rect = boardEl.children[index].getBoundingClientRect(); return `${rect.left - wrapRect.left + rect.width / 2},${rect.top - wrapRect.top + rect.height / 2}`; }).join(' ');
+    selectionLine.setAttribute('points', points);
+}
+function beginDrag(event) { const index = tileAtPoint(event.clientX, event.clientY); if (index === null)
+    return; isDragging = true; dragMoved = false; dragPointerId = event.pointerId; boardEl.setPointerCapture(event.pointerId); chooseTile(index); event.preventDefault(); }
+function moveDrag(event) { if (!isDragging || event.pointerId !== dragPointerId)
+    return; const index = tileAtPoint(event.clientX, event.clientY); if (index !== null && index !== selectedPath[selectedPath.length - 1]) {
+    chooseTile(index);
+    dragMoved = true;
+} event.preventDefault(); }
+function endDrag(event) { if (!isDragging || event.pointerId !== dragPointerId)
+    return; isDragging = false; clickGuardUntil = performance.now() + 300; if (boardEl.hasPointerCapture(event.pointerId))
+    boardEl.releasePointerCapture(event.pointerId); if (dragMoved && selectedPath.length >= 3)
+    submitSelectedWord(); dragPointerId = null; }
+function submitSelectedWord() { if (!state?.board || selectedPath.length < 3)
+    return; pendingWord = selectedPath.map(index => state.board.letters[index]).join(''); send({ action: 'submit_word', word: pendingWord }); selectedPath = []; renderBoard(); }
+function celebrateWord(word, points) { const burst = document.createElement('div'); burst.className = 'word-burst'; burst.innerHTML = `<strong>${escapeHtml(word)}</strong><span>+${points} point${points === 1 ? '' : 's'}</span><i>✦</i><i>✦</i><i>✦</i>`; boardWrap.appendChild(burst); boardWrap.classList.remove('word-win'); void boardWrap.clientWidth; boardWrap.classList.add('word-win'); window.setTimeout(() => { burst.remove(); boardWrap.classList.remove('word-win'); }, 1200); }
 function send(payload) { if (socket?.readyState === WebSocket.OPEN)
     socket.send(JSON.stringify(payload)); }
 function renderScoreboard() {
@@ -214,8 +260,7 @@ function updateTimer() {
     const secs = seconds % 60;
     $('timer').textContent = `${mins}:${String(secs).padStart(2, '0')}`;
     $('timer-bar').setAttribute('style', `width:${Math.min(100, left / (state.duration_secs * 1000) * 100)}%`);
-    if (seconds <= 10)
-        $('timer').style.color = 'var(--coral)';
+    $('timer').style.color = seconds <= 10 ? 'var(--coral)' : 'var(--cream)';
 }
 function renderGameOver() {
     if (!state)
@@ -239,15 +284,14 @@ function escapeHtml(text) { const div = document.createElement('div'); div.textC
 function backToLobby() { if (socket) {
     socket.close();
     socket = null;
-} state = null; currentRoom = ''; showScreen(lobby); connectLobby(); }
+} state = null; currentRoom = ''; localStorage.removeItem('baffle_room'); location.hash = ''; showScreen(lobby); connectLobby(); }
 createButton.addEventListener('click', () => connect(roomCode()));
 joinButton.addEventListener('click', () => connect(roomCodeInput.value.trim()));
 roomCodeInput.addEventListener('keydown', event => { if (event.key === 'Enter')
     connect(roomCodeInput.value.trim()); });
 startButton.addEventListener('click', () => send({ action: 'start', mode: modeSelect.value }));
 modeSelect.addEventListener('change', () => { const descriptions = { classic: 'The original pressure cooker. Plenty of time for a big score.', blitz: 'One minute. Zero mercy. Every second counts.', mega: 'A roomier 5×5 grid for explorers who like their chaos extra large.' }; modeDescription.textContent = descriptions[modeSelect.value]; });
-submitButton.addEventListener('click', () => { if (!state?.board || selectedPath.length < 3)
-    return; send({ action: 'submit_word', word: selectedPath.map(index => state.board.letters[index]).join('') }); });
+submitButton.addEventListener('click', submitSelectedWord);
 $('clear-btn').addEventListener('click', () => { selectedPath = []; renderBoard(); });
 $('copy-link-btn').addEventListener('click', async () => { await navigator.clipboard?.writeText(`${location.origin}${location.pathname}?room=${currentRoom}`); showToast('Invite link copied.'); });
 $('back-to-lobby-btn').addEventListener('click', backToLobby);
@@ -257,16 +301,24 @@ $('rules-btn').addEventListener('click', () => $('rules-modal').classList.remove
 $('close-rules-btn').addEventListener('click', () => $('rules-modal').classList.add('hidden'));
 $('rules-modal').addEventListener('click', event => { if (event.target === $('rules-modal'))
     $('rules-modal').classList.add('hidden'); });
+boardEl.addEventListener('pointerdown', beginDrag);
+boardEl.addEventListener('pointermove', moveDrag);
+boardEl.addEventListener('pointerup', endDrag);
+boardEl.addEventListener('pointercancel', endDrag);
+window.addEventListener('resize', drawPath);
 const savedName = localStorage.getItem('baffle_name');
 if (savedName)
     playerName.value = savedName;
 const inviteRoom = new URLSearchParams(location.search).get('room');
+const savedRoom = localStorage.getItem('baffle_room');
 const hash = location.hash.replace('#', '').split('/')[0];
-if (inviteRoom) {
-    roomCodeInput.value = inviteRoom.toUpperCase();
+const inviteCode = inviteRoom?.toUpperCase();
+const rememberedRoom = hash || savedRoom;
+if (savedName && rememberedRoom && (!inviteCode || inviteCode === rememberedRoom))
+    connect(rememberedRoom);
+else if (inviteCode) {
+    roomCodeInput.value = inviteCode;
     connectLobby();
 }
-else if (hash && savedName)
-    connect(hash);
 else
     connectLobby();

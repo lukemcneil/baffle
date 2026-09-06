@@ -80,9 +80,12 @@
         </aside>
         <div class="board-column">
           <div class="game-intro"><div><p class="eyebrow" id="game-eyebrow">Your move</p><h2>Hunt the hidden words.</h2></div><div class="round-badge"><span id="found-count">0</span><small>found</small></div></div>
-          <div id="board" class="board" aria-label="Letter board"></div>
+          <div id="board-wrap" class="board-wrap">
+            <svg id="path-lines" class="path-lines" aria-hidden="true"><polyline id="selection-line" points=""></polyline></svg>
+            <div id="board" class="board" aria-label="Letter board"></div>
+          </div>
           <div class="word-dock">
-            <div class="current-word-wrap"><span class="section-kicker">Your word</span><div id="current-word" class="current-word">Tap letters to begin<span class="cursor"></span></div></div>
+            <div class="current-word-wrap"><span class="section-kicker">Your word</span><div id="current-word" class="current-word">Drag letters to begin<span class="cursor"></span></div></div>
             <div class="word-actions"><button id="clear-btn" class="secondary-button">Clear</button><button id="submit-btn" class="primary-button" disabled>Submit word <span>↗</span></button></div>
           </div>
           <div id="toast" class="toast" role="status"></div>
@@ -100,7 +103,7 @@
       </div>
     </section>
   </main>
-  <div id="rules-modal" class="modal hidden"><div class="modal-card"><button id="close-rules-btn" class="modal-close">×</button><p class="eyebrow">The tiny rulebook</p><h2>How to play</h2><div class="rule-row"><span>01</span><p><strong>Trace a word.</strong> Tap neighboring letters—up, down, sideways, or diagonal.</p></div><div class="rule-row"><span>02</span><p><strong>Mind your paws.</strong> You cannot use the same tile twice in one word.</p></div><div class="rule-row"><span>03</span><p><strong>Score big.</strong> 3–4 letters score 1, then longer words climb fast.</p></div><div class="rule-row"><span>04</span><p><strong>Race together.</strong> Everyone hunts the same grid. First to find it does not matter—your score does.</p></div></div></div>
+  <div id="rules-modal" class="modal hidden"><div class="modal-card"><button id="close-rules-btn" class="modal-close">×</button><p class="eyebrow">The tiny rulebook</p><h2>How to play</h2><div class="rule-row"><span>01</span><p><strong>Trace a word.</strong> Drag across neighboring letters—up, down, sideways, or diagonal—then release to score.</p></div><div class="rule-row"><span>02</span><p><strong>Mind your paws.</strong> You cannot use the same tile twice in one word.</p></div><div class="rule-row"><span>03</span><p><strong>Score big.</strong> 3–4 letters score 1, then longer words climb fast.</p></div><div class="rule-row"><span>04</span><p><strong>Race together.</strong> Everyone hunts the same grid. First to find it does not matter—your score does.</p></div></div></div>
   <script src="dist/game.js"></script>
 </body>
 </html>

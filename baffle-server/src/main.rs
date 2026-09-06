@@ -52,7 +52,7 @@ async fn game_socket(
     let lobby_sender = lobby.0.clone();
     ws.channel(move |mut stream| Box::pin(async move {
         let sender;
-        let seat = { let mut all = rooms.lock().await; let room = all.0.entry(code.clone()).or_insert_with(|| { let (tx, _) = broadcast::channel(16); Room { state: GameState::new(8), sender: tx, last_activity: Instant::now(), rematch_code: None } }); match room.state.join(&player) { Ok(seat) => { room.last_activity = Instant::now(); sender = room.sender.clone(); seat }, Err(err) => { let _ = stream.send(Message::Text(format!("{{\"Err\":\"{}\"}}", err))).await; return Ok(()); } } };
+        let (seat, connection_id) = { let mut all = rooms.lock().await; let room = all.0.entry(code.clone()).or_insert_with(|| { let (tx, _) = broadcast::channel(16); Room { state: GameState::new(8), sender: tx, last_activity: Instant::now(), rematch_code: None } }); match room.state.join(&player) { Ok(connection) => { room.last_activity = Instant::now(); sender = room.sender.clone(); connection }, Err(err) => { let _ = stream.send(Message::Text(format!("{{\"Err\":\"{}\"}}", err))).await; return Ok(()); } } };
         // Notify every already-connected player in the room. The joining
         // player gets the initial snapshot below, so this broadcast is for
         // the host and other waiting players.
@@ -66,7 +66,7 @@ async fn game_socket(
                 update = updates.recv() => { if update.is_err() { break; } if let Some(room) = rooms.lock().await.0.get(&code) { let _ = stream.send(Message::Text(snapshot(&room.state, seat))).await; } else { break; } }
             }
         }
-        let mut all = rooms.lock().await; if let Some(room) = all.0.get_mut(&code) { room.state.disconnect(&player); room.last_activity = Instant::now(); let _ = room.sender.send(()); }
+        let mut all = rooms.lock().await; if let Some(room) = all.0.get_mut(&code) { room.state.disconnect(seat, connection_id); room.last_activity = Instant::now(); let _ = room.sender.send(()); }
         Ok(())
     }))
 }
@@ -194,8 +194,14 @@ fn room_list(all: &Rooms) -> Vec<RoomInfo> {
             if room.state.phase == Phase::Waiting {
                 Some(RoomInfo {
                     code: code.clone(),
-                    players: room.state.players.iter().map(|p| p.name.clone()).collect(),
-                    player_count: room.state.players.len(),
+                    players: room
+                        .state
+                        .players
+                        .iter()
+                        .filter(|p| p.connected)
+                        .map(|p| p.name.clone())
+                        .collect(),
+                    player_count: room.state.players.iter().filter(|p| p.connected).count(),
                     max_players: room.state.max_players,
                 })
             } else {

@@ -43,6 +43,7 @@ pub struct Player {
     pub words: Vec<String>,
     pub streak: u32,
     pub connected: bool,
+    connection_id: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -62,6 +63,7 @@ pub struct GameState {
     pub ends_at: Option<Instant>,
     pub ends_at_ms: Option<u64>,
     pub max_players: usize,
+    next_connection_id: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -141,22 +143,35 @@ impl GameState {
             ends_at: None,
             ends_at_ms: None,
             max_players,
+            next_connection_id: 0,
         }
     }
 
-    pub fn join(&mut self, name: &str) -> Result<usize, ActionError> {
+    pub fn join(&mut self, name: &str) -> Result<(usize, u64), ActionError> {
+        self.next_connection_id = self.next_connection_id.wrapping_add(1);
+        let connection_id = self.next_connection_id;
         if let Some(player) = self
             .players
             .iter_mut()
             .find(|p| p.name.eq_ignore_ascii_case(name))
         {
             player.connected = true;
-            return Ok(player.seat);
+            player.connection_id = connection_id;
+            return Ok((player.seat, connection_id));
         }
         if self.phase != Phase::Waiting {
             return Err(ActionError::GameAlreadyStarted);
         }
-        if self.players.len() >= self.max_players {
+        if let Some(player) = self.players.iter_mut().find(|p| !p.connected) {
+            player.name = name.to_string();
+            player.score = 0;
+            player.words.clear();
+            player.streak = 0;
+            player.connected = true;
+            player.connection_id = connection_id;
+            return Ok((player.seat, connection_id));
+        }
+        if self.players.iter().filter(|p| p.connected).count() >= self.max_players {
             return Err(ActionError::RoomFull);
         }
         let seat = self.players.len();
@@ -167,17 +182,16 @@ impl GameState {
             words: Vec::new(),
             streak: 0,
             connected: true,
+            connection_id,
         });
-        Ok(seat)
+        Ok((seat, connection_id))
     }
 
-    pub fn disconnect(&mut self, name: &str) {
-        if let Some(p) = self
-            .players
-            .iter_mut()
-            .find(|p| p.name.eq_ignore_ascii_case(name))
-        {
-            p.connected = false;
+    pub fn disconnect(&mut self, seat: usize, connection_id: u64) {
+        if let Some(player) = self.players.get_mut(seat) {
+            if player.connection_id == connection_id {
+                player.connected = false;
+            }
         }
     }
 
@@ -366,7 +380,7 @@ mod tests {
     #[test]
     fn accepted_word_scores_and_duplicates_are_rejected() {
         let mut game = GameState::new(2);
-        let seat = game.join("Tester").unwrap();
+        let (seat, _) = game.join("Tester").unwrap();
         game.start(seat, Mode::Blitz).unwrap();
         game.board = Some(Board {
             size: 2,
@@ -377,5 +391,35 @@ mod tests {
             game.submit_word(seat, "SUE"),
             Err(ActionError::DuplicateWord)
         ));
+    }
+
+    #[test]
+    fn stale_disconnect_cannot_hide_a_reconnected_player() {
+        let mut game = GameState::new(2);
+        let (seat, first_connection) = game.join("Luke").unwrap();
+        let (same_seat, second_connection) = game.join("Luke").unwrap();
+        assert_eq!(seat, same_seat);
+        game.disconnect(seat, first_connection);
+        assert!(game.players[seat].connected);
+        game.disconnect(seat, second_connection);
+        assert!(!game.players[seat].connected);
+    }
+
+    #[test]
+    fn waiting_room_reuses_disconnected_slots() {
+        let mut game = GameState::new(2);
+        let (_, _) = game.join("Luke").unwrap();
+        let (wife_seat, wife_connection) = game.join("Wife").unwrap();
+        game.disconnect(wife_seat, wife_connection);
+        let (new_seat, _) = game.join("Friend").unwrap();
+        assert_eq!(new_seat, wife_seat);
+        assert_eq!(game.players.len(), 2);
+        assert_eq!(
+            game.players
+                .iter()
+                .filter(|player| player.connected)
+                .count(),
+            2
+        );
     }
 }

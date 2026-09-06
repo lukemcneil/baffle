@@ -31,7 +31,7 @@ On this machine, the current address is <http://192.168.0.105:8000>. The phone a
 
 1. Create a room and share the four-letter code.
 2. Pick a mode: Classic (3 minutes), Blitz (60 seconds), or Mega Grid (5×5 for more chaos).
-3. Click neighboring letters to trace a word. A tile can only be used once in a word.
-4. Submit words of three or more letters. Every valid word scores for everyone in the room in real time.
+3. Drag across neighboring letters to trace a word, then release to submit it. Tapping still works with the Submit button as a fallback. A tile can only be used once in a word.
+4. Valid words score automatically for you in real time. Duplicate, disconnected, and unknown words explain what went wrong.
 
 Words score 1 point for 3–4 letters, 2 for 5, 3 for 6, 5 for 7, and 11 for 8+. Duplicate words do not score twice for the same player.
