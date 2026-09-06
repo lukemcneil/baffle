@@ -17,6 +17,16 @@ cargo run
 
 Open <http://localhost:8000>. Share the URL and a room code with friends on the same hosted server. For a different frontend host, point the browser URL at the Rust server with `?server=host:8000`.
 
+## Play from a phone on the same Wi-Fi
+
+Bind the server to the local network, then use your computer's Wi-Fi address:
+
+```sh
+ROCKET_ADDRESS=0.0.0.0 cargo run
+```
+
+On this machine, the current address is <http://192.168.0.105:8000>. The phone and computer must be on the same Wi-Fi, and macOS may ask you to allow incoming connections for the server.
+
 ## How to play
 
 1. Create a room and share the four-letter code.
