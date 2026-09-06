@@ -30,7 +30,7 @@ let isDragging = false;
 let dragMoved = false;
 let dragPointerId = null;
 let clickGuardUntil = 0;
-let pendingWord = '';
+let pendingWords = [];
 function wsUrl(path) {
     const params = new URLSearchParams(location.search);
     const host = params.get('server') || location.host;
@@ -53,6 +53,7 @@ function connect(code) {
         return;
     }
     currentRoom = code.toUpperCase();
+    pendingWords = [];
     localStorage.setItem('baffle_name', name);
     localStorage.setItem('baffle_room', currentRoom);
     location.hash = currentRoom;
@@ -67,6 +68,8 @@ function connect(code) {
         if ('Err' in message) {
             const labels = { RoomFull: 'That room is full.', GameAlreadyStarted: 'That game has already started.', NotHost: 'Only the host can start the game.', NotEnoughPlayers: 'Add at least one player first.', NotAWord: 'That one is not in my dictionary.', NotOnBoard: 'Those letters are not connected on the grid.', DuplicateWord: 'Already found — try another!', InvalidWord: 'Words need 3–25 letters.', GameOver: 'Time is up!' };
             if (state?.phase === 'playing') {
+                if (['NotAWord', 'NotOnBoard', 'DuplicateWord', 'InvalidWord', 'GameOver'].includes(message.Err))
+                    pendingWords.shift();
                 showToast(labels[message.Err] || `Could not do that: ${message.Err}`, true);
                 if (message.Err === 'DuplicateWord') {
                     const finds = document.querySelector('.finds-panel');
@@ -82,9 +85,8 @@ function connect(code) {
             return;
         }
         if ('word_accepted' in message) {
-            celebrateWord(pendingWord, message.points);
+            celebrateWord(pendingWords.shift() || 'Nice!', message.points);
             showToast(`+${message.points} point${message.points === 1 ? '' : 's'} — nice find!`);
-            pendingWord = '';
             return;
         }
         if ('rematch_code' in message) {
@@ -191,7 +193,7 @@ function chooseTile(index) {
     if (index === last)
         selectedPath.pop();
     else if (selectedPath.includes(index)) {
-        selectedPath = [index];
+        selectedPath = selectedPath.slice(0, selectedPath.indexOf(index) + 1);
     }
     else if (last === undefined || isNeighbor(last, index, state.board.size))
         selectedPath.push(index);
@@ -200,7 +202,23 @@ function chooseTile(index) {
     renderBoard();
 }
 function isNeighbor(a, b, size) { const ar = Math.floor(a / size), ac = a % size, br = Math.floor(b / size), bc = b % size; return Math.max(Math.abs(ar - br), Math.abs(ac - bc)) <= 1; }
-function tileAtPoint(x, y) { const element = document.elementFromPoint(x, y); const tile = element?.closest('.tile'); return tile ? Number(tile.dataset.index) : null; }
+function tileAtPoint(x, y) {
+    const tiles = Array.from(boardEl.querySelectorAll('.tile'));
+    let nearest = null;
+    let nearestDistance = Number.POSITIVE_INFINITY;
+    tiles.forEach(tile => {
+        const rect = tile.getBoundingClientRect();
+        const centerX = rect.left + rect.width / 2;
+        const centerY = rect.top + rect.height / 2;
+        const distance = Math.hypot(x - centerX, y - centerY);
+        const hitRadius = Math.max(rect.width * 0.82, 36);
+        if (distance <= hitRadius && distance < nearestDistance) {
+            nearest = Number(tile.dataset.index);
+            nearestDistance = distance;
+        }
+    });
+    return nearest;
+}
 function drawPath() {
     if (!state?.board || !selectedPath.length) {
         selectionLine.setAttribute('points', '');
@@ -211,19 +229,51 @@ function drawPath() {
     const points = selectedPath.map(index => { const rect = boardEl.children[index].getBoundingClientRect(); return `${rect.left - wrapRect.left + rect.width / 2},${rect.top - wrapRect.top + rect.height / 2}`; }).join(' ');
     selectionLine.setAttribute('points', points);
 }
-function beginDrag(event) { const index = tileAtPoint(event.clientX, event.clientY); if (index === null)
-    return; isDragging = true; dragMoved = false; dragPointerId = event.pointerId; boardEl.setPointerCapture(event.pointerId); chooseTile(index); event.preventDefault(); }
-function moveDrag(event) { if (!isDragging || event.pointerId !== dragPointerId)
-    return; const index = tileAtPoint(event.clientX, event.clientY); if (index !== null && index !== selectedPath[selectedPath.length - 1]) {
+function beginDrag(event) {
+    const index = tileAtPoint(event.clientX, event.clientY);
+    if (index === null)
+        return;
+    isDragging = true;
+    dragMoved = false;
+    dragPointerId = event.pointerId;
+    boardEl.setPointerCapture(event.pointerId);
     chooseTile(index);
-    dragMoved = true;
-} event.preventDefault(); }
-function endDrag(event) { if (!isDragging || event.pointerId !== dragPointerId)
-    return; isDragging = false; clickGuardUntil = performance.now() + 300; if (boardEl.hasPointerCapture(event.pointerId))
-    boardEl.releasePointerCapture(event.pointerId); if (dragMoved && selectedPath.length >= 3)
-    submitSelectedWord(); dragPointerId = null; }
+    event.preventDefault();
+}
+function moveDrag(event) {
+    if (!isDragging || event.pointerId !== dragPointerId)
+        return;
+    const index = tileAtPoint(event.clientX, event.clientY);
+    const last = selectedPath[selectedPath.length - 1];
+    if (index !== null && index !== last) {
+        dragMoved = true;
+        if (!selectedPath.includes(index) && (last === undefined || isNeighbor(last, index, state?.board?.size || 4))) {
+            selectedPath.push(index);
+            renderBoard();
+        }
+    }
+    event.preventDefault();
+}
+function endDrag(event) {
+    if (!isDragging || event.pointerId !== dragPointerId)
+        return;
+    isDragging = false;
+    clickGuardUntil = performance.now() + 300;
+    if (boardEl.hasPointerCapture(event.pointerId))
+        boardEl.releasePointerCapture(event.pointerId);
+    if (dragMoved && selectedPath.length >= 3)
+        submitSelectedWord();
+    else if (dragMoved) {
+        selectedPath = [];
+        renderBoard();
+    }
+    dragPointerId = null;
+}
 function submitSelectedWord() { if (!state?.board || selectedPath.length < 3)
-    return; pendingWord = selectedPath.map(index => state.board.letters[index]).join(''); send({ action: 'submit_word', word: pendingWord }); selectedPath = []; renderBoard(); }
+    return; if (socket?.readyState !== WebSocket.OPEN) {
+    showToast('Reconnecting — try that word again.', true);
+    return;
+} const word = selectedPath.map(index => state.board.letters[index]).join(''); pendingWords.push(word); send({ action: 'submit_word', word }); selectedPath = []; renderBoard(); }
 function celebrateWord(word, points) { const burst = document.createElement('div'); burst.className = 'word-burst'; burst.innerHTML = `<strong>${escapeHtml(word)}</strong><span>+${points} point${points === 1 ? '' : 's'}</span><i>✦</i><i>✦</i><i>✦</i>`; boardWrap.appendChild(burst); boardWrap.classList.remove('word-win'); void boardWrap.clientWidth; boardWrap.classList.add('word-win'); window.setTimeout(() => { burst.remove(); boardWrap.classList.remove('word-win'); }, 1200); }
 function send(payload) { if (socket?.readyState === WebSocket.OPEN)
     socket.send(JSON.stringify(payload)); }

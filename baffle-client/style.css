@@ -36,7 +36,7 @@ label { display:block; color:var(--muted); font-size:12px; margin-bottom:8px; } 
 
 .board-wrap { position:relative; width:100%; touch-action:none; }
 .path-lines { position:absolute; inset:0; z-index:2; width:100%; height:100%; pointer-events:none; overflow:visible; }
-.path-lines polyline { fill:none; stroke:var(--coral); stroke-width:8; stroke-linecap:round; stroke-linejoin:round; opacity:.92; filter:drop-shadow(0 3px 4px rgba(0,0,0,.3)); }
+.path-lines polyline { fill:none; stroke:var(--coral); stroke-width:clamp(6px,1.5vw,9px); stroke-linecap:round; stroke-linejoin:round; opacity:.92; filter:drop-shadow(0 3px 4px rgba(0,0,0,.3)); }
 .board { position:relative; z-index:1; }
 .word-burst { position:absolute; z-index:3; inset:50% auto auto 50%; min-width:150px; padding:13px 18px 15px; border:1px solid rgba(244,201,93,.7); border-radius:17px; color:var(--ink); background:var(--yellow); box-shadow:0 12px 25px rgba(0,0,0,.3); text-align:center; transform:translate(-50%,-50%); animation:wordWin .9s cubic-bezier(.2,.8,.2,1) both; pointer-events:none; }
 .word-burst strong { display:block; font:700 20px 'Space Grotesk'; letter-spacing:.03em; }
@@ -60,7 +60,7 @@ label { display:block; color:var(--muted); font-size:12px; margin-bottom:8px; } 
   .score-panel #scoreboard { overflow:hidden; }
   .score-row .score-name { font-size:9px; }.score-row .score-value { font-size:9px; }
   .game-intro { margin:7px 3px 8px; }.game-intro h2 { font-size:19px; }.round-badge { width:42px; height:42px; }
-  .board { padding:9px; gap:6px; border-radius:17px; }.board.mega .tile { font-size:clamp(18px,5vw,30px); }
+  .board { padding:9px; gap:6px; border-radius:17px; user-select:none; -webkit-user-select:none; }.tile { -webkit-tap-highlight-color:transparent; }.board.mega .tile { font-size:clamp(18px,5vw,30px); }
   .word-dock { margin-top:8px; padding:9px 11px; }.current-word { font-size:14px; margin-top:4px; }.word-actions { margin-top:7px; }.word-actions button { padding:8px 10px!important; }
   .toast { height:20px; padding-top:4px; font-size:11px; }
   .finds-panel { display:flex; align-items:center; gap:12px; height:65px; margin-top:7px; padding:9px 11px; }.finds-heading { min-width:68px; }.finds-heading h3 { font-size:21px; margin-top:2px; }.word-list { flex:1; min-height:0; max-height:39px; overflow:hidden; margin:0; gap:5px; }.word-chip { padding:5px 6px; font-size:9px; }.rules-note { display:none; }
