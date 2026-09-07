@@ -3,8 +3,9 @@ type Phase = 'waiting' | 'playing' | 'game_over';
 
 interface Board { size: number; letters: string[]; }
 interface FoundWord { word: string; points: number; }
+interface RecentFind { player: string; points: number; word_length: number; at_ms: number; }
 interface Player { seat: number; name: string; score: number; word_count: number; connected: boolean; is_me: boolean; words?: FoundWord[]; }
-interface GameState { phase: Phase; mode: Mode; board: Board | null; duration_secs: number; ends_at_ms: number | null; my_seat: number; my_score: number; my_words: FoundWord[]; my_streak: number; possible_words?: FoundWord[]; perfect_score?: number; players: Player[]; }
+interface GameState { phase: Phase; mode: Mode; board: Board | null; duration_secs: number; ends_at_ms: number | null; my_seat: number; my_score: number; my_words: FoundWord[]; possible_words?: FoundWord[]; perfect_score?: number; recent_activity?: RecentFind[]; players: Player[]; }
 interface Room { code: string; players: string[]; player_count: number; max_players: number; }
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
@@ -127,7 +128,7 @@ function renderGame(): void {
   $('connection-state').innerHTML = '<span class="live-dot"></span> Live';
   $('game-room-code').textContent = currentRoom;
   $('game-mode-pill').textContent = state.mode === 'mega' ? 'MEGA GRID' : state.mode.toUpperCase();
-  renderBoard(); renderScoreboard(); renderFinds(); updateTimer();
+  renderBoard(); renderScoreboard(); renderLivePulse(); renderFinds(); updateTimer();
   if (timerHandle === null) timerHandle = window.setInterval(updateTimer, 500);
 }
 
@@ -246,10 +247,24 @@ function renderScoreboard(): void {
 function renderFinds(): void {
   if (!state) return;
   $('your-score').innerHTML = `${state.my_score} <small>pts</small>`; $('found-count').textContent = String(state.my_words.length);
-  const streak = $('streak-badge'); streak.classList.toggle('hidden', state.my_streak < 3); streak.textContent = `🔥 ${state.my_streak} streak`;
   const list = $('word-list'); list.innerHTML = '';
   if (!state.my_words.length) { list.innerHTML = '<p class="empty-finds">Your first find is hiding in there.</p>'; return; }
   [...state.my_words].reverse().forEach(found => { const chip = document.createElement('span'); chip.className = 'word-chip'; chip.innerHTML = `<span>${escapeHtml(found.word)}</span><b>+${found.points}</b>`; list.appendChild(chip); });
+}
+
+function renderLivePulse(): void {
+  if (!state) return;
+  const players = state.players.filter(player => player.connected);
+  const leader = [...players].sort((a, b) => b.score - a.score)[0];
+  $('live-leader').textContent = leader ? `${leader.name} leads with ${pointsLabel(leader.score)}` : 'Waiting for the first score';
+  const activity = (state.recent_activity || []).filter(find => Date.now() - find.at_ms <= 15_000).sort((a, b) => b.at_ms - a.at_ms);
+  const recentTotals = new Map<string, { points: number; finds: number }>();
+  activity.forEach(find => { const total = recentTotals.get(find.player) || { points: 0, finds: 0 }; total.points += find.points; total.finds += 1; recentTotals.set(find.player, total); });
+  const hot = [...recentTotals.entries()].sort((a, b) => b[1].points - a[1].points || b[1].finds - a[1].finds)[0];
+  $('live-momentum').textContent = hot ? `${hot[0]} is hot · +${hot[1].points} in the last 15 seconds` : 'No recent finds · make the next move';
+  const feed = $('recent-activity'); feed.innerHTML = '';
+  if (!activity.length) { feed.innerHTML = '<span class="activity-empty">The room is warming up.</span>'; return; }
+  activity.slice(0, 3).forEach(find => { const item = document.createElement('span'); item.className = 'activity-item'; item.innerHTML = `<strong>${escapeHtml(find.player)}</strong><span>${find.word_length} letters · +${find.points}</span>`; feed.appendChild(item); });
 }
 
 function updateTimer(): void {
@@ -257,6 +272,7 @@ function updateTimer(): void {
   const left = Math.max(0, state.ends_at_ms - Date.now()); const seconds = Math.ceil(left / 1000); const mins = Math.floor(seconds / 60); const secs = seconds % 60;
   $('timer').textContent = `${mins}:${String(secs).padStart(2, '0')}`; $('timer-bar').setAttribute('style', `width:${Math.min(100, left / (state.duration_secs * 1000) * 100)}%`);
   $('timer').style.color = seconds <= 10 ? 'var(--coral)' : 'var(--cream)';
+  renderLivePulse();
 }
 
 function pointsLabel(points: number): string { return `${points} point${points === 1 ? '' : 's'}`; }

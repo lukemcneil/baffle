@@ -41,13 +41,20 @@ pub struct FoundWord {
     pub points: u32,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct RecentFind {
+    pub player: String,
+    pub points: u32,
+    pub word_length: usize,
+    pub at_ms: u64,
+}
+
 #[derive(Debug, Clone)]
 pub struct Player {
     pub seat: usize,
     pub name: String,
     pub score: u32,
     pub words: Vec<FoundWord>,
-    pub streak: u32,
     pub connected: bool,
     connection_id: u64,
 }
@@ -71,6 +78,7 @@ pub struct GameState {
     pub max_players: usize,
     pub possible_words: Option<Vec<FoundWord>>,
     pub perfect_score: Option<u32>,
+    pub recent_activity: Vec<RecentFind>,
     next_connection_id: u64,
 }
 
@@ -84,9 +92,9 @@ pub struct ClientState {
     pub my_seat: usize,
     pub my_score: u32,
     pub my_words: Vec<FoundWord>,
-    pub my_streak: u32,
     pub possible_words: Option<Vec<FoundWord>>,
     pub perfect_score: Option<u32>,
+    pub recent_activity: Vec<RecentFind>,
     pub players: Vec<ClientPlayer>,
 }
 
@@ -156,6 +164,7 @@ impl GameState {
             max_players,
             possible_words: None,
             perfect_score: None,
+            recent_activity: Vec::new(),
             next_connection_id: 0,
         }
     }
@@ -179,7 +188,6 @@ impl GameState {
             player.name = name.to_string();
             player.score = 0;
             player.words.clear();
-            player.streak = 0;
             player.connected = true;
             player.connection_id = connection_id;
             return Ok((player.seat, connection_id));
@@ -193,7 +201,6 @@ impl GameState {
             name: name.to_string(),
             score: 0,
             words: Vec::new(),
-            streak: 0,
             connected: true,
             connection_id,
         });
@@ -226,8 +233,8 @@ impl GameState {
         for p in &mut self.players {
             p.score = 0;
             p.words.clear();
-            p.streak = 0;
         }
+        self.recent_activity.clear();
         self.ends_at = Some(Instant::now() + Duration::from_secs(self.duration_secs));
         self.ends_at_ms = Some(epoch_ms() + self.duration_secs * 1000);
         self.phase = Phase::Playing;
@@ -235,6 +242,7 @@ impl GameState {
     }
 
     pub fn tick(&mut self) -> bool {
+        self.prune_recent_activity();
         if self.phase == Phase::Playing
             && self
                 .ends_at
@@ -261,10 +269,6 @@ impl GameState {
         if word.len() < 3 || word.len() > 25 || !word.bytes().all(|b| b.is_ascii_alphabetic()) {
             return Err(ActionError::InvalidWord);
         }
-        let player = self.players.get_mut(seat).ok_or(ActionError::InvalidSeat)?;
-        if player.words.iter().any(|found| found.word == word) {
-            return Err(ActionError::DuplicateWord);
-        }
         let board = self.board.as_ref().ok_or(ActionError::WrongPhase)?;
         if !words::is_word(&word) {
             return Err(ActionError::NotAWord);
@@ -273,11 +277,21 @@ impl GameState {
             return Err(ActionError::NotOnBoard);
         }
         let base = base_points(&word);
-        player.streak += 1;
-        let combo = if player.streak >= 3 { 1 } else { 0 };
-        let points = base + combo;
+        let points = base;
+        let player = self.players.get_mut(seat).ok_or(ActionError::InvalidSeat)?;
+        if player.words.iter().any(|found| found.word == word) {
+            return Err(ActionError::DuplicateWord);
+        }
+        let player_name = player.name.clone();
+        let word_length = word.len();
         player.score += points;
         player.words.push(FoundWord { word, points });
+        self.recent_activity.push(RecentFind {
+            player: player_name,
+            points,
+            word_length,
+            at_ms: epoch_ms(),
+        });
         Ok(points)
     }
 
@@ -296,12 +310,12 @@ impl GameState {
             my_seat,
             my_score: me.map(|p| p.score).unwrap_or(0),
             my_words: me.map(|p| p.words.clone()).unwrap_or_default(),
-            my_streak: me.map(|p| p.streak).unwrap_or(0),
             possible_words: if self.phase == Phase::GameOver {
                 self.possible_words.clone()
             } else {
                 None
             },
+            recent_activity: self.recent_activity.clone(),
             perfect_score: if self.phase == Phase::GameOver {
                 self.perfect_score
             } else {
@@ -337,9 +351,13 @@ impl GameState {
             })
             .collect();
         let base_total: u32 = possible_words.iter().map(|found| found.points).sum();
-        let streak_bonus = possible_words.len().saturating_sub(2) as u32;
-        self.perfect_score = Some(base_total + streak_bonus);
+        self.perfect_score = Some(base_total);
         self.possible_words = Some(possible_words);
+    }
+
+    fn prune_recent_activity(&mut self) {
+        let cutoff = epoch_ms().saturating_sub(15_000);
+        self.recent_activity.retain(|find| find.at_ms >= cutoff);
     }
 }
 
@@ -443,6 +461,22 @@ mod tests {
         ));
         assert_eq!(game.players[seat].words[0].word, "SUE");
         assert_eq!(game.players[seat].words[0].points, 1);
+    }
+
+    #[test]
+    fn accepted_words_use_standard_points_without_a_combo_bonus() {
+        let mut game = GameState::new(1);
+        let (seat, _) = game.join("Tester").unwrap();
+        game.start(seat, Mode::Blitz).unwrap();
+        game.board = Some(Board {
+            size: 2,
+            letters: vec!["A".into(), "L".into(), "E".into(), "T".into()],
+        });
+        assert_eq!(game.submit_word(seat, "ALE").unwrap(), 1);
+        assert_eq!(game.submit_word(seat, "LEA").unwrap(), 1);
+        assert_eq!(game.submit_word(seat, "LET").unwrap(), 1);
+        assert_eq!(game.players[seat].score, 3);
+        assert_eq!(game.recent_activity.len(), 3);
     }
 
     #[test]
