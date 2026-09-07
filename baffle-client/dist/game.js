@@ -35,8 +35,8 @@ let toastHandle = null;
 let isDragging = false;
 let dragMoved = false;
 let dragPointerId = null;
-let lastPointerX = 0;
-let lastPointerY = 0;
+let lastDragX = 0;
+let lastDragY = 0;
 let clickGuardUntil = 0;
 let pendingWords = [];
 let selectedPossibleWord = '';
@@ -75,10 +75,21 @@ function connect(code) {
     socket.addEventListener('message', event => {
         const message = JSON.parse(event.data);
         if ('Err' in message) {
-            const labels = { RoomFull: 'That room is full.', GameAlreadyStarted: 'That game has already started.', NotHost: 'Only the host can start the game.', NotEnoughPlayers: 'Add at least one player first.', NotAWord: 'That one is not in my dictionary.', NotOnBoard: 'Those letters are not connected on the grid.', DuplicateWord: 'Already found — try another!', InvalidWord: 'Words need 3–25 letters.', GameOver: 'Time is up!' };
+            const submissionErrors = ['NotAWord', 'NotOnBoard', 'DuplicateWord', 'InvalidWord', 'GameOver'];
+            const rejectedWord = state?.phase === 'playing' && submissionErrors.includes(message.Err) ? pendingWords.shift() : undefined;
+            const tracedWord = rejectedWord?.toUpperCase();
+            const labels = {
+                RoomFull: 'That room is full.',
+                GameAlreadyStarted: 'That game has already started.',
+                NotHost: 'Only the host can start the game.',
+                NotEnoughPlayers: 'Add at least one player first.',
+                NotAWord: tracedWord ? `${tracedWord} isn’t in the dictionary.` : 'That one is not in my dictionary.',
+                NotOnBoard: tracedWord ? `${tracedWord} is not a connected path.` : 'Those letters are not connected on the grid.',
+                DuplicateWord: tracedWord ? `${tracedWord} was already found — try another!` : 'Already found — try another!',
+                InvalidWord: tracedWord ? `${tracedWord} needs to be 3–25 letters.` : 'Words need 3–25 letters.',
+                GameOver: 'Time is up!'
+            };
             if (state?.phase === 'playing') {
-                if (['NotAWord', 'NotOnBoard', 'DuplicateWord', 'InvalidWord', 'GameOver'].includes(message.Err))
-                    pendingWords.shift();
                 showToast(labels[message.Err] || `Could not do that: ${message.Err}`, true);
                 if (message.Err === 'DuplicateWord') {
                     const finds = document.querySelector('.finds-panel');
@@ -215,15 +226,15 @@ function isNeighbor(a, b, size) { const ar = Math.floor(a / size), ac = a % size
 function tileAtPoint(x, y) {
     const tiles = Array.from(boardEl.querySelectorAll('.tile'));
     const boardRect = boardEl.getBoundingClientRect();
-    if (x < boardRect.left || x > boardRect.right || y < boardRect.top || y > boardRect.bottom)
+    const edgeTolerance = 12;
+    if (x < boardRect.left - edgeTolerance || x > boardRect.right + edgeTolerance || y < boardRect.top - edgeTolerance || y > boardRect.bottom + edgeTolerance)
         return null;
     let nearest = null;
     let nearestDistance = Number.POSITIVE_INFINITY;
     tiles.forEach(tile => {
         const index = Number(tile.dataset.index);
-        const rect = tile.getBoundingClientRect();
-        const centerX = rect.left + rect.width / 2;
-        const centerY = rect.top + rect.height / 2;
+        const centerX = boardRect.left + tile.offsetLeft + tile.offsetWidth / 2;
+        const centerY = boardRect.top + tile.offsetTop + tile.offsetHeight / 2;
         const distance = Math.hypot(x - centerX, y - centerY);
         if (distance < nearestDistance) {
             nearest = index;
@@ -232,32 +243,45 @@ function tileAtPoint(x, y) {
     });
     return nearest;
 }
-function tileForDragPoint(x, y) {
-    const lastIndex = selectedPath.length ? selectedPath[selectedPath.length - 1] : null;
-    if (lastIndex === null || !state?.board)
-        return tileAtPoint(x, y);
+function nextTileForDrag(x, y) {
+    const lastIndex = selectedPath[selectedPath.length - 1];
+    if (lastIndex === undefined || !state?.board)
+        return null;
     const lastTile = boardEl.children[lastIndex];
     if (!lastTile)
-        return tileAtPoint(x, y);
-    const lastRect = lastTile.getBoundingClientRect();
-    const lastCenterX = lastRect.left + lastRect.width / 2;
-    const lastCenterY = lastRect.top + lastRect.height / 2;
-    const deltaX = x - lastCenterX;
-    const deltaY = y - lastCenterY;
-    const thresholdX = lastRect.width * 0.32;
-    const thresholdY = lastRect.height * 0.32;
-    if (Math.abs(deltaX) >= thresholdX && Math.abs(deltaY) >= thresholdY) {
-        const row = Math.floor(lastIndex / state.board.size);
-        const col = lastIndex % state.board.size;
-        const nextRow = row + (deltaY > 0 ? 1 : -1);
-        const nextCol = col + (deltaX > 0 ? 1 : -1);
-        if (nextRow >= 0 && nextRow < state.board.size && nextCol >= 0 && nextCol < state.board.size) {
-            const diagonal = nextRow * state.board.size + nextCol;
-            if (!selectedPath.includes(diagonal))
-                return diagonal;
-        }
+        return null;
+    const boardRect = boardEl.getBoundingClientRect();
+    const style = getComputedStyle(boardEl);
+    const columnGap = Number.parseFloat(style.columnGap) || 0;
+    const rowGap = Number.parseFloat(style.rowGap) || columnGap;
+    const centerX = boardRect.left + lastTile.offsetLeft + lastTile.offsetWidth / 2;
+    const centerY = boardRect.top + lastTile.offsetTop + lastTile.offsetHeight / 2;
+    const horizontalTravel = Math.abs(x - centerX) / (lastTile.offsetWidth + columnGap);
+    const verticalTravel = Math.abs(y - centerY) / (lastTile.offsetHeight + rowGap);
+    const largerTravel = Math.max(horizontalTravel, verticalTravel);
+    const smallerTravel = Math.min(horizontalTravel, verticalTravel);
+    if (largerTravel < 0.56)
+        return null;
+    let rowStep = 0;
+    let colStep = 0;
+    const isDiagonal = smallerTravel >= 0.34 && largerTravel / smallerTravel <= 2.75;
+    if (isDiagonal) {
+        rowStep = y > centerY ? 1 : -1;
+        colStep = x > centerX ? 1 : -1;
     }
-    return tileAtPoint(x, y);
+    else {
+        if (largerTravel < 0.64)
+            return null;
+        if (horizontalTravel > verticalTravel)
+            colStep = x > centerX ? 1 : -1;
+        else
+            rowStep = y > centerY ? 1 : -1;
+    }
+    const row = Math.floor(lastIndex / state.board.size) + rowStep;
+    const col = lastIndex % state.board.size + colStep;
+    if (row < 0 || row >= state.board.size || col < 0 || col >= state.board.size)
+        return null;
+    return row * state.board.size + col;
 }
 function drawPath() {
     if (!state?.board || !selectedPath.length) {
@@ -276,10 +300,11 @@ function beginDrag(event) {
     isDragging = true;
     dragMoved = false;
     dragPointerId = event.pointerId;
-    lastPointerX = event.clientX;
-    lastPointerY = event.clientY;
+    lastDragX = event.clientX;
+    lastDragY = event.clientY;
     boardEl.setPointerCapture(event.pointerId);
-    chooseTile(index);
+    selectedPath = [index];
+    renderBoard();
     event.preventDefault();
 }
 function appendDragTile(index) {
@@ -295,18 +320,23 @@ function appendDragTile(index) {
 function moveDrag(event) {
     if (!isDragging || event.pointerId !== dragPointerId)
         return;
-    const tile = boardEl.querySelector('.tile');
-    const step = Math.max(7, (tile?.getBoundingClientRect().width || 48) * 0.2);
-    const distance = Math.hypot(event.clientX - lastPointerX, event.clientY - lastPointerY);
-    const samples = Math.max(1, Math.ceil(distance / step));
-    for (let sample = 1; sample <= samples; sample += 1) {
-        const progress = sample / samples;
-        const index = tileForDragPoint(lastPointerX + (event.clientX - lastPointerX) * progress, lastPointerY + (event.clientY - lastPointerY) * progress);
-        if (index !== null)
-            appendDragTile(index);
-    }
-    lastPointerX = event.clientX;
-    lastPointerY = event.clientY;
+    const coalesced = event.getCoalescedEvents?.() || [];
+    const samples = [...coalesced];
+    const lastCoalesced = samples[samples.length - 1];
+    if (!lastCoalesced || lastCoalesced.clientX !== event.clientX || lastCoalesced.clientY !== event.clientY)
+        samples.push(event);
+    samples.forEach(point => {
+        const distance = Math.hypot(point.clientX - lastDragX, point.clientY - lastDragY);
+        const steps = Math.max(1, Math.ceil(distance / 12));
+        for (let step = 1; step <= steps; step += 1) {
+            const progress = step / steps;
+            const index = nextTileForDrag(lastDragX + (point.clientX - lastDragX) * progress, lastDragY + (point.clientY - lastDragY) * progress);
+            if (index !== null)
+                appendDragTile(index);
+        }
+        lastDragX = point.clientX;
+        lastDragY = point.clientY;
+    });
     event.preventDefault();
 }
 function endDrag(event) {
@@ -425,13 +455,13 @@ function renderPossibleWords() {
     const query = possibleSearch.value.trim().toLowerCase();
     const possibleWords = (state.possible_words || []).filter(found => !query || found.word.toLowerCase().includes(query));
     const foundBy = new Map();
-    state.players.forEach(player => (player.words || []).forEach(found => { const owners = foundBy.get(found.word) || []; owners.push(player.name); foundBy.set(found.word, owners); }));
+    state.players.forEach(player => (player.words || []).forEach(found => { const key = found.word.toLowerCase(); const owners = foundBy.get(key) || []; owners.push(player.name); foundBy.set(key, owners); }));
     possibleWordList.innerHTML = '';
     if (!possibleWords.length) {
         possibleWordList.innerHTML = '<p class="no-results-words">No possible words match that filter.</p>';
         return;
     }
-    possibleWords.forEach(found => { const owners = foundBy.get(found.word) || []; const chip = document.createElement('button'); chip.type = 'button'; chip.className = `possible-word-chip${owners.length ? ' found' : ''}${found.word === selectedPossibleWord ? ' selected' : ''}`; chip.title = owners.length ? `Found by ${owners.join(', ')}` : 'Nobody found this word'; chip.innerHTML = `<strong>${escapeHtml(found.word)}</strong><b>+${found.points}</b><i>${owners.length ? `✓ ${escapeHtml(owners.join(', '))}` : 'missed'}`; chip.addEventListener('click', () => { selectedPossibleWord = found.word; renderWordMap(); renderPossibleWords(); }); possibleWordList.appendChild(chip); });
+    possibleWords.forEach(found => { const owners = foundBy.get(found.word.toLowerCase()) || []; const chip = document.createElement('button'); chip.type = 'button'; chip.className = `possible-word-chip${owners.length ? ' found' : ''}${found.word === selectedPossibleWord ? ' selected' : ''}`; chip.title = owners.length ? `Found by ${owners.join(', ')}` : 'Nobody found this word'; chip.innerHTML = `<strong>${escapeHtml(found.word)}</strong><b>+${found.points}</b><i>${owners.length ? `✓ ${escapeHtml(owners.join(', '))}` : 'missed'}`; chip.addEventListener('click', () => { selectedPossibleWord = found.word; renderWordMap(); renderPossibleWords(); }); possibleWordList.appendChild(chip); });
     $('possible-summary').textContent = query ? `${possibleWords.length} matching word${possibleWords.length === 1 ? '' : 's'} · perfect play is ${pointsLabel(state.perfect_score || 0)}` : `${possibleWords.length} word${possibleWords.length === 1 ? '' : 's'} on this board · perfect play is ${pointsLabel(state.perfect_score || 0)}`;
 }
 function findWordPath(board, word) {
