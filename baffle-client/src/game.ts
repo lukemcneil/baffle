@@ -133,9 +133,10 @@ function connectLobby(): void {
 
 function renderRooms(rooms: Room[]): void {
   const list = $('active-games-list');
-  if (!rooms.length) { list.innerHTML = '<div class="no-games">No open rooms yet. Be the first!</div>'; return; }
+  const activeRooms = rooms.filter(room => room.player_count > 0);
+  if (!activeRooms.length) { list.innerHTML = '<div class="no-games">No open rooms yet. Be the first!</div>'; return; }
   list.innerHTML = '';
-  rooms.forEach(room => {
+  activeRooms.forEach(room => {
     const row = document.createElement('button'); row.className = 'active-game-row'; row.type = 'button';
     row.innerHTML = `<span class="game-players">${escapeHtml(room.players.join(', '))}</span><span class="game-count">${room.player_count}/${room.max_players} →</span>`;
     row.addEventListener('click', () => connect(room.code)); list.appendChild(row);
