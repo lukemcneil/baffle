@@ -164,6 +164,8 @@ function isNeighbor(a: number, b: number, size: number): boolean { const ar = Ma
 
 function tileAtPoint(x: number, y: number): number | null {
   const tiles = Array.from(boardEl.querySelectorAll<HTMLButtonElement>('.tile'));
+  const boardRect = boardEl.getBoundingClientRect();
+  if (x < boardRect.left || x > boardRect.right || y < boardRect.top || y > boardRect.bottom) return null;
   let nearest: number | null = null;
   let nearestDistance = Number.POSITIVE_INFINITY;
   tiles.forEach(tile => {
@@ -172,13 +174,37 @@ function tileAtPoint(x: number, y: number): number | null {
     const centerX = rect.left + rect.width / 2;
     const centerY = rect.top + rect.height / 2;
     const distance = Math.hypot(x - centerX, y - centerY);
-    const hitRadius = Math.max(rect.width * 0.92, 42);
-    if (distance <= hitRadius && distance < nearestDistance) {
+    if (distance < nearestDistance) {
       nearest = index;
       nearestDistance = distance;
     }
   });
   return nearest;
+}
+
+function tileForDragPoint(x: number, y: number): number | null {
+  const lastIndex = selectedPath.length ? selectedPath[selectedPath.length - 1] : null;
+  if (lastIndex === null || !state?.board) return tileAtPoint(x, y);
+  const lastTile = boardEl.children[lastIndex] as HTMLElement | undefined;
+  if (!lastTile) return tileAtPoint(x, y);
+  const lastRect = lastTile.getBoundingClientRect();
+  const lastCenterX = lastRect.left + lastRect.width / 2;
+  const lastCenterY = lastRect.top + lastRect.height / 2;
+  const deltaX = x - lastCenterX;
+  const deltaY = y - lastCenterY;
+  const thresholdX = lastRect.width * 0.32;
+  const thresholdY = lastRect.height * 0.32;
+  if (Math.abs(deltaX) >= thresholdX && Math.abs(deltaY) >= thresholdY) {
+    const row = Math.floor(lastIndex / state.board.size);
+    const col = lastIndex % state.board.size;
+    const nextRow = row + (deltaY > 0 ? 1 : -1);
+    const nextCol = col + (deltaX > 0 ? 1 : -1);
+    if (nextRow >= 0 && nextRow < state.board.size && nextCol >= 0 && nextCol < state.board.size) {
+      const diagonal = nextRow * state.board.size + nextCol;
+      if (!selectedPath.includes(diagonal)) return diagonal;
+    }
+  }
+  return tileAtPoint(x, y);
 }
 
 function drawPath(): void {
@@ -219,7 +245,7 @@ function moveDrag(event: PointerEvent): void {
   const samples = Math.max(1, Math.ceil(distance / step));
   for (let sample = 1; sample <= samples; sample += 1) {
     const progress = sample / samples;
-    const index = tileAtPoint(lastPointerX + (event.clientX - lastPointerX) * progress, lastPointerY + (event.clientY - lastPointerY) * progress);
+    const index = tileForDragPoint(lastPointerX + (event.clientX - lastPointerX) * progress, lastPointerY + (event.clientY - lastPointerY) * progress);
     if (index !== null) appendDragTile(index);
   }
   lastPointerX = event.clientX;
