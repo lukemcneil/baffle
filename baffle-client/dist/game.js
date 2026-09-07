@@ -21,6 +21,10 @@ const submitButton = $('submit-btn');
 const toastEl = $('toast');
 const possibleSearch = $('possible-search');
 const possibleWordList = $('possible-word-list');
+const possibleMapWrap = $('possible-map-wrap');
+const possiblePathLine = $('possible-path-line');
+const possibleSelectionLine = $('possible-selection-line');
+const possibleBoardEl = $('possible-board');
 let socket = null;
 let lobbySocket = null;
 let state = null;
@@ -35,6 +39,7 @@ let lastPointerX = 0;
 let lastPointerY = 0;
 let clickGuardUntil = 0;
 let pendingWords = [];
+let selectedPossibleWord = '';
 function wsUrl(path) {
     const params = new URLSearchParams(location.search);
     const host = params.get('server') || location.host;
@@ -380,7 +385,9 @@ function renderGameOver() {
         words.forEach(found => { const chip = document.createElement('span'); chip.className = `results-word-chip${found.word.length === longestLength ? ' longest' : ''}`; chip.innerHTML = `<strong>${escapeHtml(found.word)}</strong><b>+${found.points}</b>${found.word.length === longestLength ? '<i>longest</i>' : ''}`; wordsEl.appendChild(chip); }); group.appendChild(wordsEl); wordGroups.appendChild(group); });
     possibleSearch.value = '';
     const possibleWords = state.possible_words || [];
+    selectedPossibleWord = possibleWords[0]?.word || '';
     $('possible-summary').textContent = `${possibleWords.length} word${possibleWords.length === 1 ? '' : 's'} on this board · perfect play is ${pointsLabel(state.perfect_score || 0)}`;
+    renderWordMap();
     renderPossibleWords();
 }
 function renderPossibleWords() {
@@ -395,8 +402,61 @@ function renderPossibleWords() {
         possibleWordList.innerHTML = '<p class="no-results-words">No possible words match that filter.</p>';
         return;
     }
-    possibleWords.forEach(found => { const owners = foundBy.get(found.word) || []; const chip = document.createElement('span'); chip.className = `possible-word-chip${owners.length ? ' found' : ''}`; chip.title = owners.length ? `Found by ${owners.join(', ')}` : 'Nobody found this word'; chip.innerHTML = `<strong>${escapeHtml(found.word)}</strong><b>+${found.points}</b><i>${owners.length ? `✓ ${escapeHtml(owners.join(', '))}` : 'missed'}</i>`; possibleWordList.appendChild(chip); });
+    possibleWords.forEach(found => { const owners = foundBy.get(found.word) || []; const chip = document.createElement('button'); chip.type = 'button'; chip.className = `possible-word-chip${owners.length ? ' found' : ''}${found.word === selectedPossibleWord ? ' selected' : ''}`; chip.title = owners.length ? `Found by ${owners.join(', ')}` : 'Nobody found this word'; chip.innerHTML = `<strong>${escapeHtml(found.word)}</strong><b>+${found.points}</b><i>${owners.length ? `✓ ${escapeHtml(owners.join(', '))}` : 'missed'}`; chip.addEventListener('click', () => { selectedPossibleWord = found.word; renderWordMap(); renderPossibleWords(); }); possibleWordList.appendChild(chip); });
     $('possible-summary').textContent = query ? `${possibleWords.length} matching word${possibleWords.length === 1 ? '' : 's'} · perfect play is ${pointsLabel(state.perfect_score || 0)}` : `${possibleWords.length} word${possibleWords.length === 1 ? '' : 's'} on this board · perfect play is ${pointsLabel(state.perfect_score || 0)}`;
+}
+function findWordPath(board, word) {
+    const letters = [...word.toUpperCase()];
+    const used = new Array(board.letters.length).fill(false);
+    const path = [];
+    function visit(index, position) {
+        if (used[index] || board.letters[index] !== letters[position])
+            return false;
+        path.push(index);
+        if (position === letters.length - 1)
+            return true;
+        used[index] = true;
+        const row = Math.floor(index / board.size);
+        const col = index % board.size;
+        for (let rowDelta = -1; rowDelta <= 1; rowDelta += 1) {
+            for (let colDelta = -1; colDelta <= 1; colDelta += 1) {
+                if (!rowDelta && !colDelta)
+                    continue;
+                const nextRow = row + rowDelta;
+                const nextCol = col + colDelta;
+                if (nextRow >= 0 && nextRow < board.size && nextCol >= 0 && nextCol < board.size && visit(nextRow * board.size + nextCol, position + 1))
+                    return true;
+            }
+        }
+        used[index] = false;
+        path.pop();
+        return false;
+    }
+    for (let start = 0; start < board.letters.length; start += 1)
+        if (visit(start, 0))
+            return path;
+    return null;
+}
+function renderWordMap() {
+    if (!state?.board)
+        return;
+    const board = state.board;
+    const word = selectedPossibleWord;
+    const path = word ? findWordPath(board, word) : null;
+    $('possible-map-word').textContent = word || 'No playable words';
+    $('possible-map-hint').textContent = path ? `${word.length} letters · one valid path highlighted` : 'No word path to show on this board.';
+    possibleBoardEl.className = `word-map-board${board.size === 5 ? ' mega' : ''}`;
+    possibleBoardEl.style.gridTemplateColumns = `repeat(${board.size}, 1fr)`;
+    possibleBoardEl.innerHTML = '';
+    board.letters.forEach((letter, index) => { const tile = document.createElement('span'); tile.className = `word-map-tile${path?.includes(index) ? ' active' : ''}`; tile.textContent = letter; if (path)
+        tile.dataset.order = String(path.indexOf(index) + 1); possibleBoardEl.appendChild(tile); });
+    if (!path) {
+        possibleSelectionLine.setAttribute('points', '');
+        return;
+    }
+    const wrapRect = possibleMapWrap.getBoundingClientRect();
+    possiblePathLine.setAttribute('viewBox', `0 0 ${wrapRect.width} ${wrapRect.height}`);
+    possibleSelectionLine.setAttribute('points', path.map(index => { const rect = possibleBoardEl.children[index].getBoundingClientRect(); return `${rect.left - wrapRect.left + rect.width / 2},${rect.top - wrapRect.top + rect.height / 2}`; }).join(' '));
 }
 function showToast(message, error = false) { if (toastHandle !== null)
     window.clearTimeout(toastHandle); toastEl.textContent = message; toastEl.className = `toast show${error ? ' error' : ''}`; toastHandle = window.setTimeout(() => { toastEl.className = 'toast'; }, 2200); }
@@ -427,6 +487,7 @@ boardEl.addEventListener('pointermove', moveDrag);
 boardEl.addEventListener('pointerup', endDrag);
 boardEl.addEventListener('pointercancel', endDrag);
 window.addEventListener('resize', drawPath);
+window.addEventListener('resize', renderWordMap);
 window.addEventListener('blur', () => { if (isDragging) {
     isDragging = false;
     dragPointerId = null;

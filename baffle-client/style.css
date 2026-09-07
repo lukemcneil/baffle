@@ -113,5 +113,26 @@ label { display:block; color:var(--muted); font-size:12px; margin-bottom:8px; } 
 }
 
 @media (max-width:680px) {
-  .board { width:min(100%, 390px); margin-left:auto; margin-right:auto; gap:8px; }
+  .board { width:min(100%, 390px); margin-left:auto; margin-right:auto; gap:20px; padding:18px; }
+}
+
+.word-map-section { max-width:780px; margin:30px auto 0; padding:19px; border:1px solid var(--line); border-radius:17px; background:rgba(27,38,71,.58); text-align:left; }
+.word-map-section .possible-heading { align-items:flex-start; }
+.word-map-section h3 { font-size:23px; margin-top:6px; color:var(--mint); }
+.possible-map-wrap { position:relative; max-width:360px; margin:16px auto 0; }
+.possible-path-line { position:absolute; inset:0; z-index:2; width:100%; height:100%; pointer-events:none; overflow:visible; }
+.possible-path-line polyline { fill:none; stroke:var(--coral); stroke-width:8px; stroke-linecap:round; stroke-linejoin:round; opacity:.9; filter:drop-shadow(0 2px 3px rgba(0,0,0,.3)); }
+.word-map-board { display:grid; gap:9px; padding:11px; border-radius:18px; background:rgba(9,15,32,.62); border:1px solid var(--line); }
+.word-map-tile { position:relative; display:grid; place-items:center; aspect-ratio:1; border-radius:10px; background:linear-gradient(145deg,#fdf5da,#dfcfa7); color:#202849; font:600 clamp(20px,5vw,32px) 'Space Grotesk'; box-shadow:0 4px 0 #aa9a74; }
+.word-map-tile.active { color:var(--ink); background:var(--yellow); box-shadow:0 4px 0 #bd9336,0 0 0 3px rgba(244,201,93,.22); transform:translateY(-2px); }
+.word-map-tile.active::after { content:attr(data-order); position:absolute; top:4px; right:7px; color:#8d6927; font:9px 'DM Mono'; }
+.possible-word-chip { appearance:none; cursor:pointer; font:9px 'DM Mono'; text-align:left; }
+.possible-word-chip:hover,.possible-word-chip.selected { border-color:rgba(244,201,93,.75); background:rgba(244,201,93,.13); }
+
+@media (max-width:680px) {
+  .word-map-section { margin-top:22px; padding:13px; }
+  .word-map-section h3 { font-size:20px; }
+  .possible-map-wrap { max-width:310px; margin-top:12px; }
+  .word-map-board { gap:8px; padding:9px; }
+  .word-map-tile { border-radius:8px; box-shadow:0 3px 0 #aa9a74; font-size:clamp(18px,7vw,28px); }
 }
