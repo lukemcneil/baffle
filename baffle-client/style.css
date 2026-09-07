@@ -99,9 +99,11 @@ label { display:block; color:var(--muted); font-size:12px; margin-bottom:8px; } 
 @keyframes livePulse { 50% { opacity:.35; transform:scale(.75); } }
 
 @media (max-width:680px) {
-  .live-radar { flex:1 0 100%; margin-top:8px; padding:8px 10px; }
+  .score-panel { flex-wrap:wrap; }
+  .score-panel #scoreboard { min-width:0; }
+  .live-radar { flex:1 0 100%; width:100%; box-sizing:border-box; margin-top:8px; padding:10px 11px; }
   .live-radar-heading { font-size:9px; }
-  .live-radar > strong { font-size:10px; margin-top:5px; }
+  .live-radar > strong { font-size:11px; margin-top:5px; }
   .live-radar > p { margin:3px 0 6px; font-size:9px; }
   .recent-activity { display:flex; gap:10px; overflow-x:auto; scrollbar-width:none; }
   .activity-item { min-width:max-content; font-size:8px; }
