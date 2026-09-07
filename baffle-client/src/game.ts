@@ -4,7 +4,7 @@ type Phase = 'waiting' | 'playing' | 'game_over';
 interface Board { size: number; letters: string[]; }
 interface FoundWord { word: string; points: number; }
 interface Player { seat: number; name: string; score: number; word_count: number; connected: boolean; is_me: boolean; words?: FoundWord[]; }
-interface GameState { phase: Phase; mode: Mode; board: Board | null; duration_secs: number; ends_at_ms: number | null; my_seat: number; my_score: number; my_words: FoundWord[]; my_streak: number; players: Player[]; }
+interface GameState { phase: Phase; mode: Mode; board: Board | null; duration_secs: number; ends_at_ms: number | null; my_seat: number; my_score: number; my_words: FoundWord[]; my_streak: number; possible_words?: FoundWord[]; perfect_score?: number; players: Player[]; }
 interface Room { code: string; players: string[]; player_count: number; max_players: number; }
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
@@ -27,6 +27,8 @@ const selectionLine = $('selection-line') as unknown as SVGPolylineElement;
 const currentWordEl = $('current-word');
 const submitButton = $('submit-btn') as HTMLButtonElement;
 const toastEl = $('toast');
+const possibleSearch = $('possible-search') as HTMLInputElement;
+const possibleWordList = $('possible-word-list');
 
 let socket: WebSocket | null = null;
 let lobbySocket: WebSocket | null = null;
@@ -275,6 +277,22 @@ function renderGameOver(): void {
   ordered.forEach((player, index) => { const row = document.createElement('div'); row.className = `final-row${index === 0 ? ' winner' : ''}`; row.innerHTML = `<span class="final-rank">${index === 0 ? '★' : index + 1}</span><span class="avatar">${escapeHtml(player.name.slice(0, 1).toUpperCase())}</span><span class="final-name"><strong>${escapeHtml(player.name)}${player.is_me ? ' · you' : ''}</strong><small>${player.word_count} word${player.word_count === 1 ? '' : 's'} found · ${pointsLabel(player.score)}</small></span><span class="final-score">${player.score} pts</span>`; scoreboard.appendChild(row); });
   const wordGroups = $('results-word-groups'); wordGroups.innerHTML = '<p class="results-section-label">EVERYONE\'S FINDS</p>';
   ordered.forEach(player => { const group = document.createElement('section'); group.className = 'results-word-group'; const words = player.words || []; group.innerHTML = `<div class="results-player-heading"><span class="avatar">${escapeHtml(player.name.slice(0, 1).toUpperCase())}</span><div><strong>${escapeHtml(player.name)}${player.is_me ? ' · you' : ''}</strong><small>${words.length} word${words.length === 1 ? '' : 's'} · ${pointsLabel(player.score)}</small></div></div>`; const wordsEl = document.createElement('div'); wordsEl.className = 'results-word-list'; if (!words.length) wordsEl.innerHTML = '<span class="no-results-words">No finds this round.</span>'; else words.forEach(found => { const chip = document.createElement('span'); chip.className = `results-word-chip${found.word.length === longestLength ? ' longest' : ''}`; chip.innerHTML = `<strong>${escapeHtml(found.word)}</strong><b>+${found.points}</b>${found.word.length === longestLength ? '<i>longest</i>' : ''}`; wordsEl.appendChild(chip); }); group.appendChild(wordsEl); wordGroups.appendChild(group); });
+  possibleSearch.value = '';
+  const possibleWords = state.possible_words || [];
+  $('possible-summary').textContent = `${possibleWords.length} word${possibleWords.length === 1 ? '' : 's'} on this board · perfect play is ${pointsLabel(state.perfect_score || 0)}`;
+  renderPossibleWords();
+}
+
+function renderPossibleWords(): void {
+  if (!state) return;
+  const query = possibleSearch.value.trim().toLowerCase();
+  const possibleWords = (state.possible_words || []).filter(found => !query || found.word.toLowerCase().includes(query));
+  const foundBy = new Map<string, string[]>();
+  state.players.forEach(player => (player.words || []).forEach(found => { const owners = foundBy.get(found.word) || []; owners.push(player.name); foundBy.set(found.word, owners); }));
+  possibleWordList.innerHTML = '';
+  if (!possibleWords.length) { possibleWordList.innerHTML = '<p class="no-results-words">No possible words match that filter.</p>'; return; }
+  possibleWords.forEach(found => { const owners = foundBy.get(found.word) || []; const chip = document.createElement('span'); chip.className = `possible-word-chip${owners.length ? ' found' : ''}`; chip.title = owners.length ? `Found by ${owners.join(', ')}` : 'Nobody found this word'; chip.innerHTML = `<strong>${escapeHtml(found.word)}</strong><b>+${found.points}</b><i>${owners.length ? `✓ ${escapeHtml(owners.join(', '))}` : 'missed'}</i>`; possibleWordList.appendChild(chip); });
+  $('possible-summary').textContent = query ? `${possibleWords.length} matching word${possibleWords.length === 1 ? '' : 's'} · perfect play is ${pointsLabel(state.perfect_score || 0)}` : `${possibleWords.length} word${possibleWords.length === 1 ? '' : 's'} on this board · perfect play is ${pointsLabel(state.perfect_score || 0)}`;
 }
 
 function showToast(message: string, error = false): void { if (toastHandle !== null) window.clearTimeout(toastHandle); toastEl.textContent = message; toastEl.className = `toast show${error ? ' error' : ''}`; toastHandle = window.setTimeout(() => { toastEl.className = 'toast'; }, 2200); }
@@ -292,6 +310,7 @@ $('copy-link-btn').addEventListener('click', async () => { await navigator.clipb
 $('back-to-lobby-btn').addEventListener('click', backToLobby); $('results-lobby-btn').addEventListener('click', backToLobby);
 $('rematch-btn').addEventListener('click', () => send({ action: 'rematch' }));
 $('rules-btn').addEventListener('click', () => $('rules-modal').classList.remove('hidden')); $('close-rules-btn').addEventListener('click', () => $('rules-modal').classList.add('hidden')); $('rules-modal').addEventListener('click', event => { if (event.target === $('rules-modal')) $('rules-modal').classList.add('hidden'); });
+possibleSearch.addEventListener('input', renderPossibleWords);
 
 boardEl.addEventListener('pointerdown', beginDrag);
 boardEl.addEventListener('pointermove', moveDrag);

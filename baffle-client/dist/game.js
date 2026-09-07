@@ -19,6 +19,8 @@ const selectionLine = $('selection-line');
 const currentWordEl = $('current-word');
 const submitButton = $('submit-btn');
 const toastEl = $('toast');
+const possibleSearch = $('possible-search');
+const possibleWordList = $('possible-word-list');
 let socket = null;
 let lobbySocket = null;
 let state = null;
@@ -357,6 +359,25 @@ function renderGameOver() {
         wordsEl.innerHTML = '<span class="no-results-words">No finds this round.</span>';
     else
         words.forEach(found => { const chip = document.createElement('span'); chip.className = `results-word-chip${found.word.length === longestLength ? ' longest' : ''}`; chip.innerHTML = `<strong>${escapeHtml(found.word)}</strong><b>+${found.points}</b>${found.word.length === longestLength ? '<i>longest</i>' : ''}`; wordsEl.appendChild(chip); }); group.appendChild(wordsEl); wordGroups.appendChild(group); });
+    possibleSearch.value = '';
+    const possibleWords = state.possible_words || [];
+    $('possible-summary').textContent = `${possibleWords.length} word${possibleWords.length === 1 ? '' : 's'} on this board · perfect play is ${pointsLabel(state.perfect_score || 0)}`;
+    renderPossibleWords();
+}
+function renderPossibleWords() {
+    if (!state)
+        return;
+    const query = possibleSearch.value.trim().toLowerCase();
+    const possibleWords = (state.possible_words || []).filter(found => !query || found.word.toLowerCase().includes(query));
+    const foundBy = new Map();
+    state.players.forEach(player => (player.words || []).forEach(found => { const owners = foundBy.get(found.word) || []; owners.push(player.name); foundBy.set(found.word, owners); }));
+    possibleWordList.innerHTML = '';
+    if (!possibleWords.length) {
+        possibleWordList.innerHTML = '<p class="no-results-words">No possible words match that filter.</p>';
+        return;
+    }
+    possibleWords.forEach(found => { const owners = foundBy.get(found.word) || []; const chip = document.createElement('span'); chip.className = `possible-word-chip${owners.length ? ' found' : ''}`; chip.title = owners.length ? `Found by ${owners.join(', ')}` : 'Nobody found this word'; chip.innerHTML = `<strong>${escapeHtml(found.word)}</strong><b>+${found.points}</b><i>${owners.length ? `✓ ${escapeHtml(owners.join(', '))}` : 'missed'}</i>`; possibleWordList.appendChild(chip); });
+    $('possible-summary').textContent = query ? `${possibleWords.length} matching word${possibleWords.length === 1 ? '' : 's'} · perfect play is ${pointsLabel(state.perfect_score || 0)}` : `${possibleWords.length} word${possibleWords.length === 1 ? '' : 's'} on this board · perfect play is ${pointsLabel(state.perfect_score || 0)}`;
 }
 function showToast(message, error = false) { if (toastHandle !== null)
     window.clearTimeout(toastHandle); toastEl.textContent = message; toastEl.className = `toast show${error ? ' error' : ''}`; toastHandle = window.setTimeout(() => { toastEl.className = 'toast'; }, 2200); }
@@ -381,6 +402,7 @@ $('rules-btn').addEventListener('click', () => $('rules-modal').classList.remove
 $('close-rules-btn').addEventListener('click', () => $('rules-modal').classList.add('hidden'));
 $('rules-modal').addEventListener('click', event => { if (event.target === $('rules-modal'))
     $('rules-modal').classList.add('hidden'); });
+possibleSearch.addEventListener('input', renderPossibleWords);
 boardEl.addEventListener('pointerdown', beginDrag);
 boardEl.addEventListener('pointermove', moveDrag);
 boardEl.addEventListener('pointerup', endDrag);

@@ -69,6 +69,8 @@ pub struct GameState {
     pub ends_at: Option<Instant>,
     pub ends_at_ms: Option<u64>,
     pub max_players: usize,
+    pub possible_words: Option<Vec<FoundWord>>,
+    pub perfect_score: Option<u32>,
     next_connection_id: u64,
 }
 
@@ -83,6 +85,8 @@ pub struct ClientState {
     pub my_score: u32,
     pub my_words: Vec<FoundWord>,
     pub my_streak: u32,
+    pub possible_words: Option<Vec<FoundWord>>,
+    pub perfect_score: Option<u32>,
     pub players: Vec<ClientPlayer>,
 }
 
@@ -150,6 +154,8 @@ impl GameState {
             ends_at: None,
             ends_at_ms: None,
             max_players,
+            possible_words: None,
+            perfect_score: None,
             next_connection_id: 0,
         }
     }
@@ -215,6 +221,8 @@ impl GameState {
         self.mode = mode;
         self.duration_secs = self.mode.duration_secs();
         self.board = Some(make_board(self.mode.size()));
+        self.possible_words = None;
+        self.perfect_score = None;
         for p in &mut self.players {
             p.score = 0;
             p.words.clear();
@@ -234,6 +242,7 @@ impl GameState {
                 .unwrap_or(false)
         {
             self.phase = Phase::GameOver;
+            self.build_recap();
             true
         } else {
             false
@@ -263,13 +272,7 @@ impl GameState {
         if !can_trace(board, &word) {
             return Err(ActionError::NotOnBoard);
         }
-        let base = match word.len() {
-            3 | 4 => 1,
-            5 => 2,
-            6 => 3,
-            7 => 5,
-            _ => 11,
-        };
+        let base = base_points(&word);
         player.streak += 1;
         let combo = if player.streak >= 3 { 1 } else { 0 };
         let points = base + combo;
@@ -294,6 +297,16 @@ impl GameState {
             my_score: me.map(|p| p.score).unwrap_or(0),
             my_words: me.map(|p| p.words.clone()).unwrap_or_default(),
             my_streak: me.map(|p| p.streak).unwrap_or(0),
+            possible_words: if self.phase == Phase::GameOver {
+                self.possible_words.clone()
+            } else {
+                None
+            },
+            perfect_score: if self.phase == Phase::GameOver {
+                self.perfect_score
+            } else {
+                None
+            },
             players: self
                 .players
                 .iter()
@@ -308,6 +321,35 @@ impl GameState {
                 })
                 .collect(),
         }
+    }
+
+    fn build_recap(&mut self) {
+        let Some(board) = self.board.as_ref() else {
+            self.possible_words = Some(Vec::new());
+            self.perfect_score = Some(0);
+            return;
+        };
+        let possible_words: Vec<_> = words::possible_words(board)
+            .into_iter()
+            .map(|word| FoundWord {
+                points: base_points(&word),
+                word,
+            })
+            .collect();
+        let base_total: u32 = possible_words.iter().map(|found| found.points).sum();
+        let streak_bonus = possible_words.len().saturating_sub(2) as u32;
+        self.perfect_score = Some(base_total + streak_bonus);
+        self.possible_words = Some(possible_words);
+    }
+}
+
+fn base_points(word: &str) -> u32 {
+    match word.len() {
+        3 | 4 => 1,
+        5 => 2,
+        6 => 3,
+        7 => 5,
+        _ => 11,
     }
 }
 
