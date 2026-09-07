@@ -207,33 +207,20 @@ function chooseTile(index) {
     renderBoard();
 }
 function isNeighbor(a, b, size) { const ar = Math.floor(a / size), ac = a % size, br = Math.floor(b / size), bc = b % size; return Math.max(Math.abs(ar - br), Math.abs(ac - bc)) <= 1; }
-function tileAtPoint(x, y, fromIndex = null, directionX = 0, directionY = 0) {
+function tileAtPoint(x, y) {
     const tiles = Array.from(boardEl.querySelectorAll('.tile'));
     let nearest = null;
-    let nearestScore = Number.POSITIVE_INFINITY;
-    const directionLength = Math.hypot(directionX, directionY);
+    let nearestDistance = Number.POSITIVE_INFINITY;
     tiles.forEach(tile => {
         const index = Number(tile.dataset.index);
-        if (fromIndex !== null && (index === fromIndex || selectedPath.includes(index) || !isNeighbor(fromIndex, index, state?.board?.size || 4)))
-            return;
         const rect = tile.getBoundingClientRect();
         const centerX = rect.left + rect.width / 2;
         const centerY = rect.top + rect.height / 2;
         const distance = Math.hypot(x - centerX, y - centerY);
-        const hitRadius = Math.max(rect.width * 0.98, 44);
-        if (distance > hitRadius)
-            return;
-        let score = distance;
-        if (fromIndex !== null && directionLength > 0) {
-            const moveX = directionX / directionLength;
-            const moveY = directionY / directionLength;
-            const tileDirectionX = centerX - (tiles[fromIndex]?.getBoundingClientRect().left || 0) - (tiles[fromIndex]?.getBoundingClientRect().width || 0) / 2;
-            const tileDirectionY = centerY - (tiles[fromIndex]?.getBoundingClientRect().top || 0) - (tiles[fromIndex]?.getBoundingClientRect().height || 0) / 2;
-            score -= (tileDirectionX * moveX + tileDirectionY * moveY) * 0.2;
-        }
-        if (score < nearestScore) {
+        const hitRadius = Math.max(rect.width * 0.92, 42);
+        if (distance <= hitRadius && distance < nearestDistance) {
             nearest = index;
-            nearestScore = score;
+            nearestDistance = distance;
         }
     });
     return nearest;
@@ -275,15 +262,12 @@ function moveDrag(event) {
     if (!isDragging || event.pointerId !== dragPointerId)
         return;
     const tile = boardEl.querySelector('.tile');
-    const directionX = event.clientX - lastPointerX;
-    const directionY = event.clientY - lastPointerY;
-    const step = Math.max(7, (tile?.getBoundingClientRect().width || 48) * 0.18);
-    const distance = Math.hypot(directionX, directionY);
+    const step = Math.max(7, (tile?.getBoundingClientRect().width || 48) * 0.2);
+    const distance = Math.hypot(event.clientX - lastPointerX, event.clientY - lastPointerY);
     const samples = Math.max(1, Math.ceil(distance / step));
     for (let sample = 1; sample <= samples; sample += 1) {
         const progress = sample / samples;
-        const lastIndex = selectedPath.length ? selectedPath[selectedPath.length - 1] : null;
-        const index = tileAtPoint(lastPointerX + directionX * progress, lastPointerY + directionY * progress, lastIndex, directionX, directionY);
+        const index = tileAtPoint(lastPointerX + (event.clientX - lastPointerX) * progress, lastPointerY + (event.clientY - lastPointerY) * progress);
         if (index !== null)
             appendDragTile(index);
     }

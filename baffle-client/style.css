@@ -108,8 +108,10 @@ label { display:block; color:var(--muted); font-size:12px; margin-bottom:8px; } 
 }
 
 @media (max-width:680px) {
-  .board { gap:4px; padding:7px; }
-  .tile { border-radius:13px; transform:scale(1.025); }
-  .tile:hover { transform:scale(1.025) translateY(-2px); }
-  .tile.selected { transform:scale(1.045) translateY(-4px) rotate(-2deg); }
+  .board { gap:7px; padding:10px; }
+  .tile { border-radius:10px; }
+}
+
+@media (max-width:680px) {
+  .board { width:min(100%, 390px); margin-left:auto; margin-right:auto; gap:8px; }
 }
