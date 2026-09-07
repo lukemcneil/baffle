@@ -106,3 +106,10 @@ label { display:block; color:var(--muted); font-size:12px; margin-bottom:8px; } 
   .recent-activity { display:flex; gap:10px; overflow-x:auto; scrollbar-width:none; }
   .activity-item { min-width:max-content; font-size:8px; }
 }
+
+@media (max-width:680px) {
+  .board { gap:4px; padding:7px; }
+  .tile { border-radius:13px; transform:scale(1.025); }
+  .tile:hover { transform:scale(1.025) translateY(-2px); }
+  .tile.selected { transform:scale(1.045) translateY(-4px) rotate(-2deg); }
+}
