@@ -279,6 +279,17 @@ fn rocket() -> _ {
     let client_dir =
         std::env::var("BAFFLE_CLIENT_DIR").unwrap_or_else(|_| "../baffle-client".into());
     rocket::build()
+        .configure(rocket::Config {
+            address: std::env::var("ROCKET_ADDRESS")
+                .ok()
+                .and_then(|address| address.parse().ok())
+                .unwrap_or_else(|| "0.0.0.0".parse().unwrap()),
+            port: std::env::var("ROCKET_PORT")
+                .ok()
+                .and_then(|port| port.parse().ok())
+                .unwrap_or(8088),
+            ..Default::default()
+        })
         .manage(Arc::new(Mutex::new(Rooms(HashMap::new()))))
         .manage(LobbySender(lobby_sender))
         .attach(Headers)

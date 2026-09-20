@@ -15,17 +15,17 @@ cd ../baffle-server
 cargo run
 ```
 
-Open <http://localhost:8000>. Share the URL and a room code with friends on the same hosted server. For a different frontend host, point the browser URL at the Rust server with `?server=host:8000`.
+Open <http://localhost:8088>. Share the URL and a room code with friends on the same hosted server. For a different frontend host, point the browser URL at the Rust server with `?server=host:8088`.
 
 ## Play from a phone on the same Wi-Fi
 
-Bind the server to the local network, then use your computer's Wi-Fi address:
+The server binds to the local network on port 8088 by default:
 
 ```sh
-ROCKET_ADDRESS=0.0.0.0 cargo run
+cargo run
 ```
 
-On this machine, the current address is <http://192.168.0.105:8000>. The phone and computer must be on the same Wi-Fi, and macOS may ask you to allow incoming connections for the server.
+On this machine, the current address is <http://192.168.0.105:8088>. The phone and computer must be on the same Wi-Fi, and macOS may ask you to allow incoming connections for the server. Set `ROCKET_PORT` or `ROCKET_ADDRESS` to override either default.
 
 ## How to play
 
