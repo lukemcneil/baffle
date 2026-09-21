@@ -49,6 +49,8 @@ let toastHandle: number | null = null;
 let isDragging = false;
 let dragMoved = false;
 let dragPointerId: number | null = null;
+let dragStartIndex: number | null = null;
+let pathBeforeDrag: number[] = [];
 let lastDragX = 0;
 let lastDragY = 0;
 let clickGuardUntil = 0;
@@ -182,7 +184,7 @@ function renderBoard(): void {
   if (!state?.board) return;
   const board = state.board; boardEl.className = `board${board.size >= 5 ? ' mega' : ''}`; boardEl.style.gridTemplateColumns = `repeat(${board.size}, 1fr)`; boardEl.innerHTML = '';
   board.letters.forEach((letter, index) => {
-    const tile = document.createElement('button'); tile.type = 'button'; tile.className = 'tile'; tile.textContent = letter; tile.dataset.index = String(index); tile.dataset.order = String(selectedPath.indexOf(index) + 1); tile.setAttribute('aria-label', `Letter ${letter}, position ${index + 1}`);
+    const tile = document.createElement('button'); tile.type = 'button'; tile.className = `tile${letter.length > 1 ? ' multi-letter' : ''}`; tile.textContent = letter; tile.dataset.index = String(index); tile.dataset.order = String(selectedPath.indexOf(index) + 1); tile.setAttribute('aria-label', `${letter.length > 1 ? 'Letters' : 'Letter'} ${letter}, position ${index + 1}`);
     if (selectedPath.includes(index)) tile.classList.add('selected');
     tile.addEventListener('click', () => { if (performance.now() < clickGuardUntil) return; chooseTile(index); }); boardEl.appendChild(tile);
   });
@@ -271,6 +273,8 @@ function beginDrag(event: PointerEvent): void {
   isDragging = true;
   dragMoved = false;
   dragPointerId = event.pointerId;
+  dragStartIndex = index;
+  pathBeforeDrag = [...selectedPath];
   lastDragX = event.clientX;
   lastDragY = event.clientY;
   boardEl.setPointerCapture(event.pointerId);
@@ -318,9 +322,14 @@ function endDrag(event: PointerEvent): void {
   isDragging = false;
   clickGuardUntil = performance.now() + 300;
   if (boardEl.hasPointerCapture(event.pointerId)) boardEl.releasePointerCapture(event.pointerId);
-  if (!cancelled && dragMoved && selectedWord().length >= 3) submitSelectedWord();
+  if (!cancelled && !dragMoved && dragStartIndex !== null) {
+    selectedPath = pathBeforeDrag;
+    chooseTile(dragStartIndex);
+  } else if (!cancelled && dragMoved && selectedWord().length >= 3) submitSelectedWord();
   else if (cancelled || dragMoved) { selectedPath = []; renderBoard(); }
   dragPointerId = null;
+  dragStartIndex = null;
+  pathBeforeDrag = [];
 }
 
 function selectedWord(): string { return state?.board ? selectedPath.map(index => state!.board!.letters[index]).join('') : ''; }
@@ -451,7 +460,7 @@ function renderWordMap(): void {
   possibleBoardEl.className = `word-map-board${board.size >= 5 ? ' mega' : ''}`;
   possibleBoardEl.style.gridTemplateColumns = `repeat(${board.size}, 1fr)`;
   possibleBoardEl.innerHTML = '';
-  board.letters.forEach((letter, index) => { const tile = document.createElement('span'); tile.className = `word-map-tile${path?.includes(index) ? ' active' : ''}`; tile.textContent = letter; if (path) tile.dataset.order = String(path.indexOf(index) + 1); possibleBoardEl.appendChild(tile); });
+  board.letters.forEach((letter, index) => { const tile = document.createElement('span'); tile.className = `word-map-tile${letter.length > 1 ? ' multi-letter' : ''}${path?.includes(index) ? ' active' : ''}`; tile.textContent = letter; if (path) tile.dataset.order = String(path.indexOf(index) + 1); possibleBoardEl.appendChild(tile); });
   if (!path) { possibleSelectionLine.setAttribute('points', ''); return; }
   const wrapRect = possibleMapWrap.getBoundingClientRect(); possiblePathLine.setAttribute('viewBox', `0 0 ${wrapRect.width} ${wrapRect.height}`);
   possibleSelectionLine.setAttribute('points', path.map(index => { const rect = (possibleBoardEl.children[index] as HTMLElement).getBoundingClientRect(); return `${rect.left - wrapRect.left + rect.width / 2},${rect.top - wrapRect.top + rect.height / 2}`; }).join(' '));
@@ -492,7 +501,7 @@ boardEl.addEventListener('pointerup', endDrag);
 boardEl.addEventListener('pointercancel', endDrag);
 window.addEventListener('resize', drawPath);
 window.addEventListener('resize', renderWordMap);
-window.addEventListener('blur', () => { if (isDragging) { isDragging = false; dragPointerId = null; selectedPath = []; renderBoard(); } });
+window.addEventListener('blur', () => { if (isDragging) { isDragging = false; dragPointerId = null; dragStartIndex = null; pathBeforeDrag = []; selectedPath = []; renderBoard(); } });
 
 const savedName = localStorage.getItem('baffle_name'); if (savedName) playerName.value = savedName;
 const inviteRoom = new URLSearchParams(location.search).get('room');

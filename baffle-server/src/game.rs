@@ -1,4 +1,4 @@
-use rand::{seq::SliceRandom, thread_rng};
+use rand::{seq::SliceRandom, thread_rng, Rng};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -476,25 +476,53 @@ fn epoch_ms() -> u64 {
 
 fn make_board(size: usize) -> Board {
     let mut rng = thread_rng();
-    const CLASSIC_DICE: [&str; 16] = [
-        "AAEEGN", "ABBJOO", "ACHOPS", "AFFKPS", "AOOTTW", "CIMOTU", "DEILRX", "DELRVY", "DISTTY",
-        "EEGHNW", "EEINSU", "EHRTVW", "EIOSST", "ELRTTY", "HIMNQU", "HLNNRZ",
-    ];
-    let mut letters: Vec<String> = if size == 4 {
-        CLASSIC_DICE
-            .iter()
-            .map(|die| die.as_bytes().choose(&mut rng).copied().unwrap() as char)
-            .map(tile_for_letter)
-            .collect()
-    } else {
-        let distribution: Vec<char> = "EEEEEEEEEEEEAAAAAAAAAIIIIIIIIOOOOOOOONNNNNNRRRRRRTTTTTTLLLLSSSSUUUUDDDDGGGBBCCMMPPFFHHVVWWYYKJXZ".chars().collect();
-        (0..size * size)
-            .map(|_| *distribution.choose(&mut rng).unwrap())
-            .map(tile_for_letter)
-            .collect()
+    make_board_with_rng(size, &mut rng)
+}
+
+const CLASSIC_DICE: [&str; 16] = [
+    "AAEEGN", "ABBJOO", "ACHOPS", "AFFKPS", "AOOTTW", "CIMOTU", "DEILRX", "DELRVY", "DISTTY",
+    "EEGHNW", "EEINSU", "EHRTVW", "EIOSST", "ELRTTY", "HIMNQU", "HLNNRZ",
+];
+
+const BIG_DICE: [&str; 25] = [
+    "AAAFRS", "AAEEEE", "AAFIRS", "ADENNN", "AEEEEM", "AEEGMU", "AEGMNN", "AFIRSY", "BJKQXZ",
+    "CCNSTW", "CEIILT", "CEILPT", "CEIPST", "DDLNOR", "DDHNOT", "DHHLOR", "DHLNOR", "EIIITT",
+    "EMOTTT", "ENSSSU", "FIPRSY", "GORRVW", "HIPRRY", "NOOTUW", "OOOTTU",
+];
+
+// Super Big Boggle has one double-letter cube and one cube with three stop
+// faces. Baffle rerolls those stop faces as E/I/O so all 36 digital tiles stay
+// playable while retaining the physical game's letter balance.
+const SUPER_DICE: [&str; 34] = [
+    "AAAFRS", "AAEEEE", "AAEEOO", "AAFIRS", "ABDEIO", "ADENNN", "AEEEEM", "AEEGMU", "AEGMNN",
+    "AEILMN", "AEINOU", "AFIRSY", "BBJKXZ", "CCENST", "CDDLNN", "CEIITT", "CEIPST", "CFGNUY",
+    "DDHNOT", "DHHLOR", "DHHNOW", "DHLNOR", "EHILRS", "EIILST", "EILPST", "EMTTTO", "ENSSSU",
+    "GORRVW", "HIRSTV", "HOPRST", "IPRSYY", "JKQWXZ", "NOOTUW", "OOOTTU",
+];
+const SUPER_DOUBLE_FACES: [&str; 6] = ["AN", "ER", "HE", "IN", "QU", "TH"];
+const SUPER_VOWEL_FACES: [&str; 3] = ["E", "I", "O"];
+
+fn make_board_with_rng<R: Rng + ?Sized>(size: usize, rng: &mut R) -> Board {
+    let mut letters: Vec<String> = match size {
+        4 => roll_dice(&CLASSIC_DICE, rng),
+        5 => roll_dice(&BIG_DICE, rng),
+        6 => {
+            let mut rolled = roll_dice(&SUPER_DICE, rng);
+            rolled.push((*SUPER_DOUBLE_FACES.choose(rng).unwrap()).to_string());
+            rolled.push((*SUPER_VOWEL_FACES.choose(rng).unwrap()).to_string());
+            rolled
+        }
+        _ => unreachable!("board size is validated before generation"),
     };
-    letters.shuffle(&mut rng);
+    letters.shuffle(rng);
     Board { size, letters }
+}
+
+fn roll_dice<R: Rng + ?Sized>(dice: &[&str], rng: &mut R) -> Vec<String> {
+    dice.iter()
+        .map(|die| die.as_bytes().choose(rng).copied().unwrap() as char)
+        .map(tile_for_letter)
+        .collect()
 }
 
 fn tile_for_letter(letter: char) -> String {
@@ -550,6 +578,7 @@ fn trace_from(board: &Board, word: &str, pos: usize, index: usize, used: &mut [b
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::{rngs::StdRng, SeedableRng};
 
     fn start_game(game: &mut GameState, seat: usize, mode: Mode, cancel_shared_words: bool) {
         game.start(seat, mode, 4, 60, cancel_shared_words).unwrap();
@@ -695,6 +724,38 @@ mod tests {
             invalid.start(invalid_seat, Mode::Classic, 7, 180, true),
             Err(ActionError::InvalidSettings)
         ));
+    }
+
+    #[test]
+    fn every_board_size_uses_balanced_dice_with_qu_support() {
+        let mut rng = StdRng::seed_from_u64(0xBAFF1E);
+
+        for size in 4..=6 {
+            let mut vowels = 0;
+            let mut qu_tiles = 0;
+            let mut double_tiles = 0;
+            let board_count = 256;
+            for _ in 0..board_count {
+                let board = make_board_with_rng(size, &mut rng);
+                assert_eq!(board.letters.len(), size * size);
+                for tile in board.letters {
+                    assert!(tile.bytes().all(|byte| byte.is_ascii_uppercase()));
+                    if matches!(tile.as_bytes()[0], b'A' | b'E' | b'I' | b'O' | b'U') {
+                        vowels += 1;
+                    }
+                    if tile == "QU" {
+                        qu_tiles += 1;
+                    }
+                    if tile.len() > 1 {
+                        double_tiles += 1;
+                    }
+                }
+            }
+            let vowel_ratio = vowels as f64 / (board_count * size * size) as f64;
+            assert!((0.25..0.55).contains(&vowel_ratio));
+            assert!(qu_tiles > 10, "size {size} did not roll enough Qu tiles");
+            assert!(double_tiles >= qu_tiles);
+        }
     }
 
     #[test]

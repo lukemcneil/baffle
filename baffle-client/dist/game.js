@@ -38,6 +38,8 @@ let toastHandle = null;
 let isDragging = false;
 let dragMoved = false;
 let dragPointerId = null;
+let dragStartIndex = null;
+let pathBeforeDrag = [];
 let lastDragX = 0;
 let lastDragY = 0;
 let clickGuardUntil = 0;
@@ -203,11 +205,11 @@ function renderBoard() {
     board.letters.forEach((letter, index) => {
         const tile = document.createElement('button');
         tile.type = 'button';
-        tile.className = 'tile';
+        tile.className = `tile${letter.length > 1 ? ' multi-letter' : ''}`;
         tile.textContent = letter;
         tile.dataset.index = String(index);
         tile.dataset.order = String(selectedPath.indexOf(index) + 1);
-        tile.setAttribute('aria-label', `Letter ${letter}, position ${index + 1}`);
+        tile.setAttribute('aria-label', `${letter.length > 1 ? 'Letters' : 'Letter'} ${letter}, position ${index + 1}`);
         if (selectedPath.includes(index))
             tile.classList.add('selected');
         tile.addEventListener('click', () => { if (performance.now() < clickGuardUntil)
@@ -311,6 +313,8 @@ function beginDrag(event) {
     isDragging = true;
     dragMoved = false;
     dragPointerId = event.pointerId;
+    dragStartIndex = index;
+    pathBeforeDrag = [...selectedPath];
     lastDragX = event.clientX;
     lastDragY = event.clientY;
     boardEl.setPointerCapture(event.pointerId);
@@ -358,13 +362,19 @@ function endDrag(event) {
     clickGuardUntil = performance.now() + 300;
     if (boardEl.hasPointerCapture(event.pointerId))
         boardEl.releasePointerCapture(event.pointerId);
-    if (!cancelled && dragMoved && selectedWord().length >= 3)
+    if (!cancelled && !dragMoved && dragStartIndex !== null) {
+        selectedPath = pathBeforeDrag;
+        chooseTile(dragStartIndex);
+    }
+    else if (!cancelled && dragMoved && selectedWord().length >= 3)
         submitSelectedWord();
     else if (cancelled || dragMoved) {
         selectedPath = [];
         renderBoard();
     }
     dragPointerId = null;
+    dragStartIndex = null;
+    pathBeforeDrag = [];
 }
 function selectedWord() { return state?.board ? selectedPath.map(index => state.board.letters[index]).join('') : ''; }
 function submitSelectedWord() { if (!state?.board || selectedWord().length < 3)
@@ -527,7 +537,7 @@ function renderWordMap() {
     possibleBoardEl.className = `word-map-board${board.size >= 5 ? ' mega' : ''}`;
     possibleBoardEl.style.gridTemplateColumns = `repeat(${board.size}, 1fr)`;
     possibleBoardEl.innerHTML = '';
-    board.letters.forEach((letter, index) => { const tile = document.createElement('span'); tile.className = `word-map-tile${path?.includes(index) ? ' active' : ''}`; tile.textContent = letter; if (path)
+    board.letters.forEach((letter, index) => { const tile = document.createElement('span'); tile.className = `word-map-tile${letter.length > 1 ? ' multi-letter' : ''}${path?.includes(index) ? ' active' : ''}`; tile.textContent = letter; if (path)
         tile.dataset.order = String(path.indexOf(index) + 1); possibleBoardEl.appendChild(tile); });
     if (!path) {
         possibleSelectionLine.setAttribute('points', '');
@@ -582,6 +592,8 @@ window.addEventListener('resize', renderWordMap);
 window.addEventListener('blur', () => { if (isDragging) {
     isDragging = false;
     dragPointerId = null;
+    dragStartIndex = null;
+    pathBeforeDrag = [];
     selectedPath = [];
     renderBoard();
 } });
