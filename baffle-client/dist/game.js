@@ -4,6 +4,8 @@ const lobby = $('lobby');
 const waitingRoom = $('waiting-room');
 const gameScreen = $('game-screen');
 const gameOver = $('game-over');
+const statsScreen = $('stats-screen');
+const statsContent = $('stats-content');
 const playerName = $('player-name');
 const roomCodeInput = $('room-code');
 const lobbyStatus = $('lobby-status');
@@ -45,14 +47,23 @@ let lastDragY = 0;
 let clickGuardUntil = 0;
 let pendingWords = [];
 let selectedPossibleWord = '';
+let statsOpen = false;
+let statsTab = 'mine';
 function wsUrl(path) {
     const params = new URLSearchParams(location.search);
     const host = params.get('server') || location.host;
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     return `${protocol}//${host}${path}`;
 }
+function apiUrl(path) {
+    const params = new URLSearchParams(location.search);
+    const host = params.get('server');
+    if (!host)
+        return path;
+    return `${location.protocol === 'https:' ? 'https:' : 'http:'}//${host}${path}`;
+}
 function showScreen(screen) {
-    [lobby, waitingRoom, gameScreen, gameOver].forEach(item => item.classList.add('hidden'));
+    [lobby, waitingRoom, gameScreen, gameOver, statsScreen].forEach(item => item.classList.add('hidden'));
     screen.classList.remove('hidden');
 }
 function roomCode() {
@@ -67,6 +78,7 @@ function connect(code) {
         return;
     }
     currentRoom = code.toUpperCase();
+    statsOpen = false;
     pendingWords = [];
     localStorage.setItem('baffle_name', name);
     localStorage.setItem('baffle_room', currentRoom);
@@ -130,7 +142,7 @@ function connect(code) {
             renderWaiting();
         else if (state.phase === 'playing')
             renderGame();
-        else
+        else if (!statsOpen)
             renderGameOver();
     });
     socket.addEventListener('close', () => { if (state?.phase === 'playing')
@@ -169,6 +181,7 @@ function renderRooms(rooms) {
 function renderWaiting() {
     if (!state)
         return;
+    statsOpen = false;
     showScreen(waitingRoom);
     $('room-code-display').textContent = currentRoom;
     $('player-count').textContent = `${state.players.filter(player => player.connected).length}/${8}`;
@@ -183,6 +196,7 @@ function renderWaiting() {
 function renderGame() {
     if (!state || !state.board)
         return;
+    statsOpen = false;
     showScreen(gameScreen);
     $('connection-state').innerHTML = '<span class="live-dot"></span> Live';
     $('game-room-code').textContent = currentRoom;
@@ -442,6 +456,7 @@ function wordPointsLabel(found) { return found.points === 0 ? 'shared' : `+${fou
 function renderGameOver() {
     if (!state)
         return;
+    statsOpen = false;
     if (timerHandle !== null) {
         window.clearInterval(timerHandle);
         timerHandle = null;
@@ -474,6 +489,10 @@ function renderGameOver() {
         ? `Values show the maximum Netflix-style score${state.players.length > 1 ? ' with the unique-word bonus' : ''}. Green words were found by someone in the room.`
         : 'Values use traditional Boggle scoring. Green words were found by someone in the room.';
     $('possible-summary').textContent = `${possibleWords.length} word${possibleWords.length === 1 ? '' : 's'} on this board · perfect play is ${pointsLabel(state.perfect_score || 0)}`;
+    const historyButton = $('view-history-btn');
+    historyButton.classList.remove('hidden');
+    historyButton.disabled = !state.game_record_id;
+    historyButton.textContent = state.game_record_id ? 'View saved game' : 'Saving to history…';
     renderWordMap();
     renderPossibleWords();
 }
@@ -547,10 +566,182 @@ function renderWordMap() {
     possiblePathLine.setAttribute('viewBox', `0 0 ${wrapRect.width} ${wrapRect.height}`);
     possibleSelectionLine.setAttribute('points', path.map(index => { const rect = possibleBoardEl.children[index].getBoundingClientRect(); return `${rect.left - wrapRect.left + rect.width / 2},${rect.top - wrapRect.top + rect.height / 2}`; }).join(' '));
 }
+async function fetchJson(path) {
+    const response = await fetch(apiUrl(path), { headers: { Accept: 'application/json' } });
+    if (!response.ok) {
+        let message = `Request failed (${response.status})`;
+        try {
+            message = (await response.json()).error || message;
+        }
+        catch { /* use status */ }
+        throw new Error(message);
+    }
+    return response.json();
+}
+function settingsLabel(settings) {
+    return `${settings.mode === 'netflix' ? 'Party' : 'Classic'} · ${settings.board_size}×${settings.board_size} · ${formatDuration(settings.duration_secs)} · shared ${settings.cancel_shared_words ? 'cancel' : 'score'}`;
+}
+function formatDuration(seconds) { return seconds >= 60 && seconds % 60 === 0 ? `${seconds / 60}m` : `${seconds}s`; }
+function formatDate(timestamp) { return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(timestamp)); }
+function formatPercent(value) { return `${value.toFixed(value >= 10 ? 0 : 1)}%`; }
+function updateStatsTabs(active) {
+    document.querySelectorAll('#stats-tabs button').forEach(button => button.classList.toggle('active', button.dataset.tab === active));
+}
+function openStats(tab = 'mine', gameId) {
+    statsOpen = true;
+    statsTab = tab;
+    disconnectLobby();
+    showScreen(statsScreen);
+    window.scrollTo(0, 0);
+    if (gameId !== undefined) {
+        location.hash = `stats/game/${gameId}`;
+        updateStatsTabs('');
+        void renderGameDetail(gameId);
+    }
+    else {
+        location.hash = `stats/${tab}`;
+        updateStatsTabs(tab);
+        void renderStatsTab(tab);
+    }
+}
+function closeStats() {
+    statsOpen = false;
+    if (state?.phase === 'game_over' && currentRoom) {
+        location.hash = currentRoom;
+        renderGameOver();
+    }
+    else {
+        location.hash = '';
+        showScreen(lobby);
+        connectLobby();
+    }
+}
+async function renderStatsTab(tab) {
+    statsContent.innerHTML = '<div class="stats-loading">Opening the record book…</div>';
+    try {
+        if (tab === 'records')
+            await renderLeaderboard();
+        else if (tab === 'recent')
+            await renderRecentGames();
+        else
+            await renderPlayerStats(localStorage.getItem('baffle_name') || playerName.value.trim());
+    }
+    catch (error) {
+        statsContent.innerHTML = `<div class="stats-empty"><strong>Couldn’t open the record book.</strong><p>${escapeHtml(error instanceof Error ? error.message : String(error))}</p></div>`;
+    }
+}
+async function renderPlayerStats(name) {
+    const search = `<form id="player-stats-search" class="stats-search"><label for="stats-player-name">Player</label><div><input id="stats-player-name" maxlength="20" value="${escapeHtml(name)}" placeholder="Enter a player name"><button class="secondary-button" type="submit">Look up</button></div></form>`;
+    if (!name) {
+        statsContent.innerHTML = `${search}<div class="stats-empty"><strong>Who are we looking for?</strong><p>Enter the same name you use when joining a game.</p></div>`;
+        bindPlayerSearch();
+        return;
+    }
+    let stats;
+    try {
+        stats = await fetchJson(`/api/stats/player/${encodeURIComponent(name)}`);
+    }
+    catch (error) {
+        statsContent.innerHTML = `${search}<div class="stats-empty"><strong>No finished games yet.</strong><p>${escapeHtml(error instanceof Error ? error.message : String(error))}</p></div>`;
+        bindPlayerSearch();
+        return;
+    }
+    const longest = stats.longest_word ? `${escapeHtml(stats.longest_word.word)} · ${stats.longest_word.length} letters` : '—';
+    statsContent.innerHTML = `${search}
+    <div class="stat-hero"><div><p class="results-section-label">CAREER CARD</p><h3>${escapeHtml(stats.name)}</h3><p>${stats.games_played} game${stats.games_played === 1 ? '' : 's'} · ${stats.wins} win${stats.wins === 1 ? '' : 's'}</p></div><strong>${formatPercent(stats.win_rate)}<small>win rate</small></strong></div>
+    <div class="metric-grid">
+      <button class="metric-card history-open" data-game-id="${stats.high_score_game_id || ''}"><span>PERSONAL BEST</span><strong>${stats.high_score}</strong><small>points · tap to reopen</small></button>
+      <div class="metric-card"><span>AVERAGE</span><strong>${stats.avg_score.toFixed(1)}</strong><small>points per game</small></div>
+      <div class="metric-card"><span>BOARD COVERAGE</span><strong>${formatPercent(stats.avg_efficiency)}</strong><small>of the perfect score</small></div>
+      <div class="metric-card"><span>ACCURACY</span><strong>${formatPercent(stats.submission_accuracy)}</strong><small>accepted attempts</small></div>
+      <div class="metric-card"><span>WORDS</span><strong>${stats.total_words}</strong><small>${stats.unique_words} different</small></div>
+      <div class="metric-card"><span>LONGEST</span><strong class="metric-word">${longest}</strong><small>favorite: ${escapeHtml(stats.favorite_word || '—')}</small></div>
+    </div>
+    <section class="stats-section"><div class="stats-section-heading"><p class="results-section-label">RECENT FORM</p><h3>Last rounds</h3></div><div class="history-list">${stats.recent_games.length ? stats.recent_games.map(game => playerGameRow(game)).join('') : '<div class="stats-empty compact">No games yet.</div>'}</div></section>
+    <div class="stats-two-column">
+      <section class="stats-section"><div class="stats-section-heading"><p class="results-section-label">BY FORMAT</p><h3>Where you shine</h3></div>${stats.by_config.map(config => `<div class="breakdown-row"><div><strong>${escapeHtml(config.label)}</strong><small>${config.games} game${config.games === 1 ? '' : 's'} · ${config.wins} wins</small></div><b>${config.avg_score.toFixed(1)} avg</b></div>`).join('') || '<div class="stats-empty compact">Play a few formats to compare them.</div>'}</section>
+      <section class="stats-section"><div class="stats-section-heading"><p class="results-section-label">RIVALS</p><h3>Head to head</h3></div>${stats.rivals.map(rival => `<div class="breakdown-row"><div><strong>${escapeHtml(rival.name)}</strong><small>${rival.games} together · ${rival.ties} ties</small></div><b>${rival.wins}–${rival.losses}</b></div>`).join('') || '<div class="stats-empty compact">Bring a rival next round.</div>'}</section>
+    </div>`;
+    bindPlayerSearch();
+    bindHistoryLinks();
+}
+function bindPlayerSearch() {
+    const form = document.getElementById('player-stats-search');
+    form?.addEventListener('submit', event => {
+        event.preventDefault();
+        const input = document.getElementById('stats-player-name');
+        const name = input.value.trim();
+        if (name) {
+            playerName.value = name;
+            localStorage.setItem('baffle_name', name);
+        }
+        statsContent.innerHTML = '<div class="stats-loading">Finding that player…</div>';
+        void renderPlayerStats(name);
+    });
+}
+function playerGameRow(game) {
+    const result = game.placement === 1 ? 'Win' : `#${game.placement}`;
+    return `<button class="history-row history-open" data-game-id="${game.game_id}"><span class="history-result${game.placement === 1 ? ' win' : ''}">${result}</span><span><strong>${game.score} points · ${game.word_count} words</strong><small>${formatDate(game.finished_at_ms)} · ${escapeHtml(settingsLabel(game.settings))}</small></span><b>${formatPercent(game.efficiency)} →</b></button>`;
+}
+async function renderLeaderboard() {
+    statsContent.innerHTML = `<div class="records-controls"><label>Rank by<select id="record-metric"><option value="efficiency">Board coverage</option><option value="score">Raw score</option></select></label><label>Mode<select id="record-mode"><option value="">All modes</option><option value="classic">Classic</option><option value="netflix">Party</option></select></label><label>Board<select id="record-board"><option value="">All sizes</option><option value="4">4×4</option><option value="5">5×5</option><option value="6">6×6</option></select></label></div><p id="records-explainer" class="stats-explainer">Board coverage compares your score with the best possible score on that exact board, so different formats stay fair.</p><div id="leaderboard-list" class="leaderboard-list"><div class="stats-loading">Ranking the wordsmiths…</div></div>`;
+    const controls = ['record-metric', 'record-mode', 'record-board'];
+    controls.forEach(id => $(id).addEventListener('change', () => { void loadLeaderboardRows(); }));
+    await loadLeaderboardRows();
+}
+async function loadLeaderboardRows() {
+    const metric = $('record-metric').value;
+    const mode = $('record-mode').value;
+    const board = $('record-board').value;
+    $('records-explainer').textContent = metric === 'efficiency'
+        ? 'Board coverage compares your score with the best possible score on that exact board, so different formats stay fair.'
+        : 'Raw score is best compared within one mode, board size, and timer. Use the filters for a fair race.';
+    const query = new URLSearchParams({ metric, limit: '50' });
+    if (mode)
+        query.set('mode', mode);
+    if (board)
+        query.set('board_size', board);
+    const list = $('leaderboard-list');
+    list.innerHTML = '<div class="stats-loading">Ranking the wordsmiths…</div>';
+    const entries = await fetchJson(`/api/stats/leaderboard?${query}`);
+    list.innerHTML = entries.length ? entries.map(entry => `<button class="leaderboard-row history-open" data-game-id="${entry.game_id}"><span class="leaderboard-rank">${entry.rank <= 3 ? ['★', 'Ⅱ', 'Ⅲ'][entry.rank - 1] : entry.rank}</span><span class="avatar">${escapeHtml(entry.name.slice(0, 1).toUpperCase())}</span><span><strong>${escapeHtml(entry.name)}</strong><small>${formatDate(entry.finished_at_ms)} · ${escapeHtml(settingsLabel(entry.settings))}</small></span><b>${metric === 'efficiency' ? formatPercent(entry.efficiency) : `${entry.score} pts`}</b></button>`).join('') : '<div class="stats-empty"><strong>No records match those filters.</strong><p>Finish a game in this format to claim the first spot.</p></div>';
+    bindHistoryLinks();
+}
+async function renderRecentGames() {
+    const games = await fetchJson('/api/stats/games?limit=50');
+    statsContent.innerHTML = `<div class="stats-section-heading recent-heading"><div><p class="results-section-label">LATEST ROUNDS</p><h3>${games.length} saved game${games.length === 1 ? '' : 's'}</h3></div><p>Completed rounds are saved automatically.</p></div><div class="game-history-grid">${games.length ? games.map(game => `<button class="game-history-card history-open" data-game-id="${game.id}"><div><span>${formatDate(game.finished_at_ms)}</span><b>Round ${game.round_number}</b></div><h3>${escapeHtml(game.winners.join(' & ') || 'No winner')}</h3><p>${game.winning_score} points · ${game.player_count} player${game.player_count === 1 ? '' : 's'}</p><small>${escapeHtml(settingsLabel(game.settings))}</small><i>Open game →</i></button>`).join('') : '<div class="stats-empty"><strong>The record book is blank.</strong><p>Finish a round and it will appear here automatically.</p></div>'}</div>`;
+    bindHistoryLinks();
+}
+function bindHistoryLinks() {
+    document.querySelectorAll('.history-open').forEach(element => element.addEventListener('click', () => {
+        const gameId = Number(element.dataset.gameId);
+        if (gameId)
+            openStats('detail', gameId);
+    }));
+}
+async function renderGameDetail(gameId) {
+    statsContent.innerHTML = '<div class="stats-loading">Rebuilding that grid…</div>';
+    try {
+        const game = await fetchJson(`/api/stats/games/${gameId}`);
+        const foundBy = new Map();
+        game.players.forEach(player => player.words.forEach(word => { const key = word.word.toLowerCase(); const owners = foundBy.get(key) || []; owners.push(player.name); foundBy.set(key, owners); }));
+        const board = `<div class="history-board" style="grid-template-columns:repeat(${game.settings.board_size},1fr)">${game.board.map(letter => `<span class="history-tile${letter.length > 1 ? ' multi-letter' : ''}">${escapeHtml(letter)}</span>`).join('')}</div>`;
+        statsContent.innerHTML = `<button id="detail-back-btn" class="text-button detail-back">← ${statsTab === 'detail' ? 'Recent games' : 'Back to stats'}</button>
+      <div class="game-detail-title"><div><p class="results-section-label">SAVED GAME #${game.id}</p><h3>${escapeHtml(game.players.filter(player => player.placement === 1).map(player => player.name).join(' & '))} ${game.players.filter(player => player.placement === 1).length > 1 ? 'tied' : 'won'}</h3><p>${formatDate(game.finished_at_ms)} · ${escapeHtml(settingsLabel(game.settings))}</p></div><strong>${game.perfect_score}<small>perfect score</small></strong></div>
+      <div class="game-detail-grid"><section class="stats-section"><div class="stats-section-heading"><p class="results-section-label">THE GRID</p><h3>Round ${game.round_number}</h3></div>${board}</section><section class="stats-section"><div class="stats-section-heading"><p class="results-section-label">FINAL STANDINGS</p><h3>${game.players.length} player${game.players.length === 1 ? '' : 's'}</h3></div>${game.players.map(player => `<div class="detail-player"><span class="history-result${player.placement === 1 ? ' win' : ''}">${player.placement === 1 ? '★' : `#${player.placement}`}</span><div><strong>${escapeHtml(player.name)}</strong><small>${player.accepted_words}/${player.total_attempts} accepted · ${player.canceled_words} canceled</small></div><b>${player.final_score} pts</b></div>`).join('')}</section></div>
+      <section class="stats-section"><div class="stats-section-heading"><p class="results-section-label">EVERY FIND</p><h3>Who found what</h3></div><div class="detail-word-groups">${game.players.map(player => `<div><strong>${escapeHtml(player.name)}</strong><p>${player.words.length ? player.words.map(word => `<span class="detail-word${word.points === 0 ? ' canceled' : ''}">${escapeHtml(word.word)} <b>${word.points ? `+${word.points}` : 'shared'}</b></span>`).join('') : '<small>No accepted words</small>'}</p></div>`).join('')}</div></section>
+      <section class="stats-section"><div class="stats-section-heading"><p class="results-section-label">THE WHOLE GRID</p><h3>${game.possible_words.length} possible words · ${game.perfect_score} points</h3></div><div class="detail-possible-words">${game.possible_words.map(word => { const owners = foundBy.get(word.word.toLowerCase()) || []; return `<span class="detail-word${owners.length ? ' found' : ''}" title="${owners.length ? `Found by ${escapeHtml(owners.join(', '))}` : 'Missed'}">${escapeHtml(word.word)} <b>+${word.points}</b><i>${owners.length ? `✓ ${escapeHtml(owners.join(', '))}` : 'missed'}</i></span>`; }).join('')}</div></section>`;
+        $('detail-back-btn').addEventListener('click', () => openStats('recent'));
+    }
+    catch (error) {
+        statsContent.innerHTML = `<button id="detail-back-btn" class="text-button detail-back">← Recent games</button><div class="stats-empty"><strong>That game couldn’t be opened.</strong><p>${escapeHtml(error instanceof Error ? error.message : String(error))}</p></div>`;
+        $('detail-back-btn').addEventListener('click', () => openStats('recent'));
+    }
+}
 function showToast(message, error = false) { if (toastHandle !== null)
     window.clearTimeout(toastHandle); toastEl.textContent = message; toastEl.className = `toast show${error ? ' error' : ''}`; toastHandle = window.setTimeout(() => { toastEl.className = 'toast'; }, 2200); }
 function escapeHtml(text) { const div = document.createElement('div'); div.textContent = text; return div.innerHTML; }
-function backToLobby() { if (socket) {
+function backToLobby() { statsOpen = false; if (socket) {
     socket.close();
     socket = null;
 } state = null; currentRoom = ''; localStorage.removeItem('baffle_room'); location.hash = ''; showScreen(lobby); connectLobby(); }
@@ -578,6 +769,11 @@ $('copy-link-btn').addEventListener('click', async () => { await navigator.clipb
 $('back-to-lobby-btn').addEventListener('click', backToLobby);
 $('results-lobby-btn').addEventListener('click', backToLobby);
 $('rematch-btn').addEventListener('click', () => send({ action: 'rematch' }));
+$('stats-btn').addEventListener('click', () => openStats('mine'));
+$('stats-back-btn').addEventListener('click', closeStats);
+$('view-history-btn').addEventListener('click', () => { if (state?.game_record_id)
+    openStats('detail', state.game_record_id); });
+document.querySelectorAll('#stats-tabs button').forEach(button => button.addEventListener('click', () => openStats(button.dataset.tab || 'mine')));
 $('rules-btn').addEventListener('click', () => $('rules-modal').classList.remove('hidden'));
 $('close-rules-btn').addEventListener('click', () => $('rules-modal').classList.add('hidden'));
 $('rules-modal').addEventListener('click', event => { if (event.target === $('rules-modal'))
@@ -602,10 +798,17 @@ if (savedName)
     playerName.value = savedName;
 const inviteRoom = new URLSearchParams(location.search).get('room');
 const savedRoom = localStorage.getItem('baffle_room');
-const hash = location.hash.replace('#', '').split('/')[0];
+const hashParts = location.hash.replace('#', '').split('/').filter(Boolean);
+const hash = hashParts[0] || '';
 const inviteCode = inviteRoom?.toUpperCase();
 const rememberedRoom = hash || savedRoom;
-if (savedName && rememberedRoom && (!inviteCode || inviteCode === rememberedRoom))
+if (hash === 'stats') {
+    if (hashParts[1] === 'game' && Number(hashParts[2]))
+        openStats('detail', Number(hashParts[2]));
+    else
+        openStats(hashParts[1] || 'mine');
+}
+else if (savedName && rememberedRoom && (!inviteCode || inviteCode === rememberedRoom))
     connect(rememberedRoom);
 else if (inviteCode) {
     roomCodeInput.value = inviteCode;

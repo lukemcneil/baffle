@@ -18,10 +18,11 @@ pub struct Board {
     pub letters: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FoundWord {
     pub word: String,
     pub points: u32,
+    pub submitted_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -40,8 +41,18 @@ pub struct Player {
     pub name: String,
     pub score: u32,
     pub words: Vec<FoundWord>,
+    pub attempts: AttemptStats,
     pub connected: bool,
     connection_id: u64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct AttemptStats {
+    pub total: u32,
+    pub invalid: u32,
+    pub not_a_word: u32,
+    pub not_on_board: u32,
+    pub duplicate: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -66,6 +77,7 @@ pub struct GameState {
     pub possible_words: Option<Vec<FoundWord>>,
     pub perfect_score: Option<u32>,
     pub recent_activity: Vec<RecentFind>,
+    pub started_at_ms: Option<u64>,
     next_connection_id: u64,
 }
 
@@ -84,6 +96,7 @@ pub struct ClientState {
     pub possible_words: Option<Vec<FoundWord>>,
     pub perfect_score: Option<u32>,
     pub recent_activity: Vec<RecentFind>,
+    pub game_record_id: Option<i64>,
     pub players: Vec<ClientPlayer>,
 }
 
@@ -172,6 +185,7 @@ impl GameState {
             possible_words: None,
             perfect_score: None,
             recent_activity: Vec::new(),
+            started_at_ms: None,
             next_connection_id: 0,
         }
     }
@@ -195,6 +209,7 @@ impl GameState {
             player.name = name.to_string();
             player.score = 0;
             player.words.clear();
+            player.attempts = AttemptStats::default();
             player.connected = true;
             player.connection_id = connection_id;
             return Ok((player.seat, connection_id));
@@ -208,6 +223,7 @@ impl GameState {
             name: name.to_string(),
             score: 0,
             words: Vec::new(),
+            attempts: AttemptStats::default(),
             connected: true,
             connection_id,
         });
@@ -252,10 +268,13 @@ impl GameState {
         for p in &mut self.players {
             p.score = 0;
             p.words.clear();
+            p.attempts = AttemptStats::default();
         }
         self.recent_activity.clear();
         self.ends_at = Some(Instant::now() + Duration::from_secs(self.duration_secs));
-        self.ends_at_ms = Some(epoch_ms() + self.duration_secs * 1000);
+        let started_at_ms = epoch_ms();
+        self.started_at_ms = Some(started_at_ms);
+        self.ends_at_ms = Some(started_at_ms + self.duration_secs * 1000);
         self.phase = Phase::Playing;
         Ok(())
     }
@@ -288,26 +307,36 @@ impl GameState {
                 ActionError::WrongPhase
             });
         }
+        if seat >= self.players.len() {
+            return Err(ActionError::InvalidSeat);
+        }
+        self.players[seat].attempts.total += 1;
         let word = raw_word.trim().to_ascii_uppercase();
         if word.len() < 3 || word.len() > 25 || !word.bytes().all(|b| b.is_ascii_alphabetic()) {
+            self.players[seat].attempts.invalid += 1;
             return Err(ActionError::InvalidWord);
         }
         let board = self.board.as_ref().ok_or(ActionError::WrongPhase)?;
         if !words::is_word(&word) {
+            self.players[seat].attempts.not_a_word += 1;
             return Err(ActionError::NotAWord);
         }
         if !can_trace(board, &word) {
+            self.players[seat].attempts.not_on_board += 1;
             return Err(ActionError::NotOnBoard);
         }
-        let player = self.players.get(seat).ok_or(ActionError::InvalidSeat)?;
+        let player = &self.players[seat];
         if player.words.iter().any(|found| found.word == word) {
+            self.players[seat].attempts.duplicate += 1;
             return Err(ActionError::DuplicateWord);
         }
         let player_name = player.name.clone();
         let word_length = word.len();
+        let submitted_ms = epoch_ms().saturating_sub(self.started_at_ms.unwrap_or_else(epoch_ms));
         self.players[seat].words.push(FoundWord {
             word: word.clone(),
             points: 0,
+            submitted_ms,
         });
         self.recent_activity.push(RecentFind {
             player: player_name,
@@ -358,6 +387,7 @@ impl GameState {
                 None
             },
             recent_activity: self.recent_activity.clone(),
+            game_record_id: None,
             perfect_score: if self.phase == Phase::GameOver {
                 self.perfect_score
             } else {
@@ -396,6 +426,7 @@ impl GameState {
                     self.players.len() > 1,
                 ),
                 word,
+                submitted_ms: 0,
             })
             .collect();
         let base_total: u32 = possible_words.iter().map(|found| found.points).sum();
@@ -618,8 +649,25 @@ mod tests {
             game.submit_word(seat, "SUE"),
             Err(ActionError::DuplicateWord)
         ));
+        assert!(matches!(
+            game.submit_word(seat, "xx"),
+            Err(ActionError::InvalidWord)
+        ));
+        assert!(matches!(
+            game.submit_word(seat, "ZZZX"),
+            Err(ActionError::NotAWord)
+        ));
+        assert!(matches!(
+            game.submit_word(seat, "THE"),
+            Err(ActionError::NotOnBoard)
+        ));
         assert_eq!(game.players[seat].words[0].word, "SUE");
         assert_eq!(game.players[seat].words[0].points, 1);
+        assert_eq!(game.players[seat].attempts.total, 5);
+        assert_eq!(game.players[seat].attempts.duplicate, 1);
+        assert_eq!(game.players[seat].attempts.invalid, 1);
+        assert_eq!(game.players[seat].attempts.not_a_word, 1);
+        assert_eq!(game.players[seat].attempts.not_on_board, 1);
     }
 
     #[test]

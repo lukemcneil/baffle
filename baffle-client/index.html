@@ -27,6 +27,7 @@
           <input id="room-code" maxlength="4" autocapitalize="characters" placeholder="CODE" aria-label="Room code">
           <button id="join-btn" class="secondary-button">Join</button>
         </div>
+        <button id="stats-btn" class="stats-entry-button"><span>◎</span> Stats &amp; game history <b>→</b></button>
         <p id="lobby-status" class="status-message" role="status"></p>
         <div id="active-games" class="open-games">
           <div class="section-kicker">Open rooms</div>
@@ -108,7 +109,16 @@
         <div id="results-word-groups" class="results-word-groups"></div>
         <section class="word-map-section"><div class="possible-heading"><div><p class="results-section-label">WORD MAP</p><h3 id="possible-map-word">Pick a word</h3><p id="possible-map-hint" class="muted-copy">Tap any word below to trace it on the grid.</p></div></div><div id="possible-map-wrap" class="possible-map-wrap"><svg id="possible-path-line" class="possible-path-line" aria-hidden="true"><polyline id="possible-selection-line" points=""></polyline></svg><div id="possible-board" class="word-map-board" aria-label="Word path map"></div></div></section>
         <section class="possible-section"><div class="possible-heading"><div><p class="results-section-label">THE WHOLE GRID</p><h3>Every possible word</h3><p id="possible-summary" class="muted-copy"></p></div><input id="possible-search" type="search" placeholder="Filter words" aria-label="Filter possible words"></div><p id="possible-note" class="possible-note">Green words were found by someone in the room.</p><div id="possible-word-list" class="possible-word-list"></div></section>
-        <div class="results-actions"><button id="rematch-btn" class="primary-button">Run it back <span>↗</span></button><button id="results-lobby-btn" class="secondary-button">Back to lobby</button></div>
+        <div class="results-actions"><button id="rematch-btn" class="primary-button">Run it back <span>↗</span></button><button id="view-history-btn" class="secondary-button hidden">Save to history…</button><button id="results-lobby-btn" class="secondary-button">Back to lobby</button></div>
+      </div>
+    </section>
+
+    <section id="stats-screen" class="screen hidden">
+      <div class="stats-shell">
+        <header class="stats-header"><div class="top-brand"><div class="mini-mark">B<span>!</span></div><span>Baffle</span></div><button id="stats-back-btn" class="text-button">← Back</button></header>
+        <div class="stats-title"><p class="eyebrow">The record book</p><h2>Every grid tells a story.</h2><p class="muted-copy">Wins, personal bests, rivalries, and every word from every finished round.</p></div>
+        <nav id="stats-tabs" class="stats-tabs" aria-label="Stats sections"><button data-tab="mine" class="active">My stats</button><button data-tab="records">Records</button><button data-tab="recent">Recent games</button></nav>
+        <div id="stats-content" class="stats-content" aria-live="polite"><div class="stats-loading">Opening the record book…</div></div>
       </div>
     </section>
   </main>

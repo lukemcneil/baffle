@@ -37,3 +37,23 @@ On this machine, the current address is <http://192.168.0.105:8088>. The phone a
 6. When the clock ends, the recap shows every player’s words, each word’s points, the top score, and the longest find.
 
 Classic words score 1 point for 3–4 letters, 2 for 5, 3 for 6, 5 for 7, and 11 for 8+. Netflix-style Party words score 1 point for 3 letters and one additional point for every additional letter; in multiplayer, a word only one player found is worth double. Duplicate words do not score twice for the same player.
+
+## Game history and stats
+
+Every completed round is saved to a local SQLite database. The app's **Stats & game history** screen includes personal records, win rate, accuracy, board coverage, head-to-head records, leaderboards, recent games, exact historical boards, everyone’s words, and every possible word.
+
+The default database is `baffle.db` in the server's working directory. Override it with an absolute path in production:
+
+```ini
+[Service]
+StateDirectory=baffle
+Environment=BAFFLE_DB_PATH=/var/lib/baffle/baffle.db
+```
+
+SQLite WAL mode is enabled. To make a consistent live backup, use SQLite's backup command rather than copying only the main file:
+
+```sh
+sqlite3 /var/lib/baffle/baffle.db ".backup '/var/backups/baffle-$(date +%F).db'"
+```
+
+The schema is created automatically on startup. Keep the database file when updating the binary; pulling and rebuilding the app does not erase history.

@@ -2,4 +2,7 @@ target/
 Cargo.lock
 node_modules/
 .DS_Store
-
+baffle.db
+baffle.db-shm
+baffle.db-wal
+baffle.db-journal

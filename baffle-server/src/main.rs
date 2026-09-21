@@ -1,18 +1,24 @@
 #[macro_use]
 extern crate rocket;
 
+use db::{Database, LeaderboardFilter};
 use game::{ActionError, ClientAction, GameState, Phase, SubmissionResult};
 use rocket::fairing::{Fairing, Info, Kind};
 use rocket::fs::FileServer;
 use rocket::futures::lock::Mutex;
 use rocket::futures::{SinkExt, StreamExt};
 use rocket::http::Header;
+use rocket::http::Status;
+use rocket::response::status;
+use rocket::serde::json::Json;
 use rocket::tokio::sync::broadcast::{self, Sender};
 use rocket::{tokio, State};
 use rocket_ws::{Message, WebSocket};
 use serde::Serialize;
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Instant};
 
+mod db;
 mod game;
 mod words;
 
@@ -21,9 +27,33 @@ struct Room {
     sender: Sender<()>,
     last_activity: Instant,
     rematch_code: Option<String>,
+    series_id: String,
+    round_number: u32,
+    started_at_ms: Option<i64>,
+    game_record_id: Option<i64>,
+    persisting: bool,
+    last_persist_attempt: Option<Instant>,
 }
 struct Rooms(HashMap<String, Room>);
 struct LobbySender(Sender<()>);
+
+impl Room {
+    fn new(series_id: String, round_number: u32) -> Self {
+        let (sender, _) = broadcast::channel(16);
+        Self {
+            state: GameState::new(8),
+            sender,
+            last_activity: Instant::now(),
+            rematch_code: None,
+            series_id,
+            round_number,
+            started_at_ms: None,
+            game_record_id: None,
+            persisting: false,
+            last_persist_attempt: None,
+        }
+    }
+}
 
 fn room_code() -> String {
     use rand::Rng;
@@ -34,8 +64,17 @@ fn room_code() -> String {
         .collect()
 }
 
-fn snapshot(state: &GameState, seat: usize) -> String {
-    serde_json::to_string(&state.to_client_state(seat)).expect("state serializes")
+fn epoch_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn snapshot(room: &Room, seat: usize) -> String {
+    let mut state = room.state.to_client_state(seat);
+    state.game_record_id = room.game_record_id;
+    serde_json::to_string(&state).expect("state serializes")
 }
 
 #[get("/game/<code>?<player>")]
@@ -52,18 +91,18 @@ async fn game_socket(
     let lobby_sender = lobby.0.clone();
     ws.channel(move |mut stream| Box::pin(async move {
         let sender;
-        let (seat, connection_id) = { let mut all = rooms.lock().await; let room = all.0.entry(code.clone()).or_insert_with(|| { let (tx, _) = broadcast::channel(16); Room { state: GameState::new(8), sender: tx, last_activity: Instant::now(), rematch_code: None } }); match room.state.join(&player) { Ok(connection) => { room.last_activity = Instant::now(); sender = room.sender.clone(); connection }, Err(err) => { let _ = stream.send(Message::Text(format!("{{\"Err\":\"{}\"}}", err))).await; return Ok(()); } } };
+        let (seat, connection_id) = { let mut all = rooms.lock().await; let room = all.0.entry(code.clone()).or_insert_with(|| Room::new(format!("{}-{}", code, epoch_ms()), 1)); match room.state.join(&player) { Ok(connection) => { room.last_activity = Instant::now(); sender = room.sender.clone(); connection }, Err(err) => { let _ = stream.send(Message::Text(format!("{{\"Err\":\"{}\"}}", err))).await; return Ok(()); } } };
         // Notify every already-connected player in the room. The joining
         // player gets the initial snapshot below, so this broadcast is for
         // the host and other waiting players.
         let _ = sender.send(());
         let _ = lobby_sender.send(());
         let mut updates = sender.subscribe();
-        if let Some(room) = rooms.lock().await.0.get(&code) { let _ = stream.send(Message::Text(snapshot(&room.state, seat))).await; }
+        if let Some(room) = rooms.lock().await.0.get(&code) { let _ = stream.send(Message::Text(snapshot(room, seat))).await; }
         loop {
             tokio::select! {
             incoming = stream.next() => match incoming { Some(Ok(message)) => handle_message(message, &code, seat, rooms.clone(), &mut stream, &sender, &lobby_sender).await, _ => break },
-                update = updates.recv() => { if update.is_err() { break; } else if let Some(room) = rooms.lock().await.0.get(&code) { let _ = stream.send(Message::Text(snapshot(&room.state, seat))).await; } else { break; } }
+                update = updates.recv() => { if update.is_err() { break; } else if let Some(room) = rooms.lock().await.0.get(&code) { let _ = stream.send(Message::Text(snapshot(room, seat))).await; } else { break; } }
             }
         }
         let mut all = rooms.lock().await; if let Some(room) = all.0.get_mut(&code) { room.state.disconnect(seat, connection_id); room.last_activity = Instant::now(); let _ = room.sender.send(()); }
@@ -97,10 +136,12 @@ async fn handle_message(
     };
     if matches!(action, ClientAction::Rematch) {
         let mut all = rooms.lock().await;
-        let new_code = match all.0.get(code) {
-            Some(room) if room.state.phase == Phase::GameOver => {
-                room.rematch_code.clone().unwrap_or_else(room_code)
-            }
+        let (new_code, series_id, round_number) = match all.0.get(code) {
+            Some(room) if room.state.phase == Phase::GameOver => (
+                room.rematch_code.clone().unwrap_or_else(room_code),
+                room.series_id.clone(),
+                room.round_number + 1,
+            ),
             _ => {
                 let _ = stream
                     .send(Message::Text("{\"Err\":\"WrongPhase\"}".into()))
@@ -109,16 +150,8 @@ async fn handle_message(
             }
         };
         if !all.0.contains_key(&new_code) {
-            let (tx, _) = broadcast::channel(16);
-            all.0.insert(
-                new_code.clone(),
-                Room {
-                    state: GameState::new(8),
-                    sender: tx,
-                    last_activity: Instant::now(),
-                    rematch_code: None,
-                },
-            );
+            all.0
+                .insert(new_code.clone(), Room::new(series_id, round_number));
         }
         if let Some(room) = all.0.get_mut(code) {
             room.rematch_code = Some(new_code.clone());
@@ -148,13 +181,21 @@ async fn handle_message(
                     cancel_shared_words,
                 } => {
                     started = true;
-                    room.state
+                    let result = room
+                        .state
                         .start(seat, mode, board_size, duration_secs, cancel_shared_words)
                         .map(|_| SubmissionResult {
                             points: 0,
                             shared_cancelled: false,
                             unique_bonus: false,
-                        })
+                        });
+                    if result.is_ok() {
+                        room.started_at_ms = room.state.started_at_ms.map(|value| value as i64);
+                        room.game_record_id = None;
+                        room.persisting = false;
+                        room.last_persist_attempt = None;
+                    }
+                    result
                 }
                 ClientAction::SubmitWord { word } => room.state.submit_word(seat, &word),
                 ClientAction::Rematch => unreachable!(),
@@ -243,6 +284,84 @@ fn health() -> &'static str {
     "baffle-server ok"
 }
 
+#[derive(Serialize)]
+struct ApiError {
+    error: String,
+}
+
+type ApiResult<T> = Result<Json<T>, status::Custom<Json<ApiError>>>;
+
+fn api_error(status_code: Status, error: impl ToString) -> status::Custom<Json<ApiError>> {
+    status::Custom(
+        status_code,
+        Json(ApiError {
+            error: error.to_string(),
+        }),
+    )
+}
+
+#[get("/api/stats/games?<limit>")]
+fn recent_games(
+    limit: Option<usize>,
+    database: &State<Arc<Database>>,
+) -> ApiResult<Vec<db::GameSummary>> {
+    database
+        .recent_games(limit.unwrap_or(20))
+        .map(Json)
+        .map_err(|error| api_error(Status::InternalServerError, error))
+}
+
+#[get("/api/stats/games/<id>")]
+fn game_detail(id: i64, database: &State<Arc<Database>>) -> ApiResult<db::GameDetail> {
+    match database.game_detail(id) {
+        Ok(Some(game)) => Ok(Json(game)),
+        Ok(None) => Err(api_error(Status::NotFound, "Game not found")),
+        Err(error) => Err(api_error(Status::InternalServerError, error)),
+    }
+}
+
+#[get("/api/stats/player/<name>")]
+fn player_stats(name: &str, database: &State<Arc<Database>>) -> ApiResult<db::PlayerStats> {
+    match database.player_stats(name) {
+        Ok(Some(stats)) => Ok(Json(stats)),
+        Ok(None) => Err(api_error(
+            Status::NotFound,
+            "No completed games for that player",
+        )),
+        Err(error) => Err(api_error(Status::InternalServerError, error)),
+    }
+}
+
+#[get("/api/stats/leaderboard?<limit>&<metric>&<mode>&<board_size>&<duration_secs>&<cancel_shared_words>")]
+fn leaderboard(
+    limit: Option<usize>,
+    metric: Option<&str>,
+    mode: Option<&str>,
+    board_size: Option<usize>,
+    duration_secs: Option<u64>,
+    cancel_shared_words: Option<bool>,
+    database: &State<Arc<Database>>,
+) -> ApiResult<Vec<db::LeaderboardEntry>> {
+    let metric = metric.unwrap_or("efficiency");
+    if !matches!(metric, "efficiency" | "score") {
+        return Err(api_error(
+            Status::BadRequest,
+            "metric must be efficiency or score",
+        ));
+    }
+    database
+        .leaderboard(LeaderboardFilter {
+            limit: limit.unwrap_or(20),
+            metric,
+            mode,
+            board_size,
+            duration_secs,
+            cancel_shared_words,
+        })
+        .map(Json)
+        .map_err(|error| api_error(Status::InternalServerError, error))
+}
+
 struct Headers;
 #[rocket::async_trait]
 impl Fairing for Headers {
@@ -260,6 +379,16 @@ impl Fairing for Headers {
 }
 
 struct Expiry;
+
+struct PersistJob {
+    code: String,
+    series_id: String,
+    round_number: u32,
+    started_at_ms: i64,
+    finished_at_ms: i64,
+    state: GameState,
+}
+
 #[rocket::async_trait]
 impl Fairing for Expiry {
     fn info(&self) -> Info {
@@ -270,13 +399,71 @@ impl Fairing for Expiry {
     }
     async fn on_liftoff(&self, rocket: &rocket::Rocket<rocket::Orbit>) {
         let rooms = Arc::clone(rocket.state::<Arc<Mutex<Rooms>>>().unwrap());
+        let database = Arc::clone(rocket.state::<Arc<Database>>().unwrap());
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                let mut all = rooms.lock().await;
-                for room in all.0.values_mut() {
-                    if room.state.tick() {
-                        let _ = room.sender.send(());
+                let mut jobs = Vec::new();
+                {
+                    let mut all = rooms.lock().await;
+                    for (code, room) in &mut all.0 {
+                        if room.state.tick() {
+                            let _ = room.sender.send(());
+                        }
+                        let retry_ready = room
+                            .last_persist_attempt
+                            .is_none_or(|attempt| attempt.elapsed().as_secs() >= 10);
+                        if room.state.phase == Phase::GameOver
+                            && room.game_record_id.is_none()
+                            && !room.persisting
+                            && retry_ready
+                        {
+                            room.persisting = true;
+                            room.last_persist_attempt = Some(Instant::now());
+                            jobs.push(PersistJob {
+                                code: code.clone(),
+                                series_id: room.series_id.clone(),
+                                round_number: room.round_number,
+                                started_at_ms: room.started_at_ms.unwrap_or_else(|| {
+                                    epoch_ms() as i64 - room.state.duration_secs as i64 * 1000
+                                }),
+                                finished_at_ms: epoch_ms() as i64,
+                                state: room.state.clone(),
+                            });
+                        }
+                    }
+                }
+                for job in jobs {
+                    let database = Arc::clone(&database);
+                    let code = job.code.clone();
+                    let series_id = job.series_id.clone();
+                    let round_number = job.round_number;
+                    let result = tokio::task::spawn_blocking(move || {
+                        database.save_game(
+                            &job.code,
+                            &job.series_id,
+                            job.round_number,
+                            job.started_at_ms,
+                            job.finished_at_ms,
+                            &job.state,
+                        )
+                    })
+                    .await;
+                    let mut all = rooms.lock().await;
+                    if let Some(room) = all.0.get_mut(&code) {
+                        if room.series_id == series_id && room.round_number == round_number {
+                            room.persisting = false;
+                            match result {
+                                Ok(Ok(game_id)) => {
+                                    room.game_record_id = Some(game_id);
+                                    let _ = room.sender.send(());
+                                }
+                                Ok(Err(error)) => eprintln!("could not save game {code}: {error}"),
+                                Err(error) => {
+                                    eprintln!("game save task failed for {code}: {error}")
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -289,6 +476,10 @@ fn rocket() -> _ {
     let (lobby_sender, _) = broadcast::channel(16);
     let client_dir =
         std::env::var("BAFFLE_CLIENT_DIR").unwrap_or_else(|_| "../baffle-client".into());
+    let database_path = std::env::var("BAFFLE_DB_PATH").unwrap_or_else(|_| "baffle.db".into());
+    let database = Arc::new(Database::open(&database_path).unwrap_or_else(|error| {
+        panic!("could not open Baffle database at {database_path}: {error}")
+    }));
     rocket::build()
         .configure(rocket::Config {
             address: std::env::var("ROCKET_ADDRESS")
@@ -302,9 +493,22 @@ fn rocket() -> _ {
             ..Default::default()
         })
         .manage(Arc::new(Mutex::new(Rooms(HashMap::new()))))
+        .manage(database)
         .manage(LobbySender(lobby_sender))
         .attach(Headers)
         .attach(Expiry)
-        .mount("/", routes![game_socket, lobby_socket, list_rooms, health])
+        .mount(
+            "/",
+            routes![
+                game_socket,
+                lobby_socket,
+                list_rooms,
+                health,
+                recent_games,
+                game_detail,
+                player_stats,
+                leaderboard
+            ],
+        )
         .mount("/", FileServer::from(PathBuf::from(client_dir)))
 }
