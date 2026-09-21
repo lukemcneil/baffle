@@ -484,7 +484,8 @@ function renderGameOver() {
         words.forEach(found => { const chip = document.createElement('span'); chip.className = `results-word-chip${found.word.length === longestLength ? ' longest' : ''}${found.points === 0 ? ' canceled' : ''}`; chip.innerHTML = `<strong>${escapeHtml(found.word)}</strong><b>${wordPointsLabel(found)}</b>${found.word.length === longestLength ? '<i>longest</i>' : ''}`; wordsEl.appendChild(chip); }); group.appendChild(wordsEl); wordGroups.appendChild(group); });
     possibleSearch.value = '';
     const possibleWords = state.possible_words || [];
-    selectedPossibleWord = possibleWords[0]?.word || '';
+    selectedPossibleWord = [...possibleWords]
+        .sort((left, right) => right.word.length - left.word.length || left.word.localeCompare(right.word))[0]?.word || '';
     $('possible-note').textContent = state.mode === 'party'
         ? `Values show the maximum Party score${state.players.length > 1 ? ' with the unique-word bonus' : ''}. Green words were found by someone in the room.`
         : 'Values use traditional Boggle scoring. Green words were found by someone in the room.';

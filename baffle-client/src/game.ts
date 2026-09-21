@@ -425,7 +425,8 @@ function renderGameOver(): void {
   ordered.forEach(player => { const group = document.createElement('section'); group.className = 'results-word-group'; const words = player.words || []; group.innerHTML = `<div class="results-player-heading"><span class="avatar">${escapeHtml(player.name.slice(0, 1).toUpperCase())}</span><div><strong>${escapeHtml(player.name)}${player.is_me ? ' · you' : ''}</strong><small>${words.length} word${words.length === 1 ? '' : 's'} · ${pointsLabel(player.score)}</small></div></div>`; const wordsEl = document.createElement('div'); wordsEl.className = 'results-word-list'; if (!words.length) wordsEl.innerHTML = '<span class="no-results-words">No finds this round.</span>'; else words.forEach(found => { const chip = document.createElement('span'); chip.className = `results-word-chip${found.word.length === longestLength ? ' longest' : ''}${found.points === 0 ? ' canceled' : ''}`; chip.innerHTML = `<strong>${escapeHtml(found.word)}</strong><b>${wordPointsLabel(found)}</b>${found.word.length === longestLength ? '<i>longest</i>' : ''}`; wordsEl.appendChild(chip); }); group.appendChild(wordsEl); wordGroups.appendChild(group); });
   possibleSearch.value = '';
   const possibleWords = state.possible_words || [];
-  selectedPossibleWord = possibleWords[0]?.word || '';
+  selectedPossibleWord = [...possibleWords]
+    .sort((left, right) => right.word.length - left.word.length || left.word.localeCompare(right.word))[0]?.word || '';
   $('possible-note').textContent = state.mode === 'party'
     ? `Values show the maximum Party score${state.players.length > 1 ? ' with the unique-word bonus' : ''}. Green words were found by someone in the room.`
     : 'Values use traditional Boggle scoring. Green words were found by someone in the room.';
