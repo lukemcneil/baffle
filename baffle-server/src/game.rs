@@ -9,7 +9,8 @@ use crate::words;
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
     Classic,
-    Netflix,
+    #[serde(alias = "netflix")]
+    Party,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -173,9 +174,9 @@ impl GameState {
     pub fn new(max_players: usize) -> Self {
         Self {
             phase: Phase::Waiting,
-            mode: Mode::Classic,
+            mode: Mode::Party,
             board_size: 4,
-            cancel_shared_words: true,
+            cancel_shared_words: false,
             board: None,
             players: Vec::new(),
             duration_secs: 180,
@@ -360,7 +361,7 @@ impl GameState {
         Ok(SubmissionResult {
             points,
             shared_cancelled: self.cancel_shared_words && finders > 1,
-            unique_bonus: self.mode == Mode::Netflix && finders == 1 && self.players.len() > 1,
+            unique_bonus: self.mode == Mode::Party && finders == 1 && self.players.len() > 1,
         })
     }
 
@@ -489,9 +490,9 @@ fn score_word(
             7 => 5,
             _ => 11,
         },
-        Mode::Netflix => word.len().saturating_sub(2) as u32,
+        Mode::Party => word.len().saturating_sub(2) as u32,
     };
-    if mode == Mode::Netflix && multiplayer && finder_count == 1 {
+    if mode == Mode::Party && multiplayer && finder_count == 1 {
         base * 2
     } else {
         base
@@ -616,6 +617,24 @@ mod tests {
     }
 
     #[test]
+    fn party_scoring_is_the_default_and_legacy_clients_still_parse() {
+        let game = GameState::new(8);
+        assert_eq!(game.mode, Mode::Party);
+        assert!(!game.cancel_shared_words);
+        let action: ClientAction = serde_json::from_str(
+            r#"{"action":"start","mode":"netflix","board_size":4,"duration_secs":60,"cancel_shared_words":false}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            action,
+            ClientAction::Start {
+                mode: Mode::Party,
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn traces_diagonal_and_rejects_reused_tiles() {
         let board = Board {
             size: 2,
@@ -729,11 +748,11 @@ mod tests {
     }
 
     #[test]
-    fn netflix_unique_bonus_becomes_base_points_when_word_is_shared() {
+    fn party_unique_bonus_becomes_base_points_when_word_is_shared() {
         let mut game = GameState::new(2);
         let (first, _) = game.join("Luke").unwrap();
         let (second, _) = game.join("Wife").unwrap();
-        start_game(&mut game, first, Mode::Netflix, false);
+        start_game(&mut game, first, Mode::Party, false);
         game.board = Some(Board {
             size: 2,
             letters: vec!["S".into(), "U".into(), "E".into(), "X".into()],
@@ -751,18 +770,18 @@ mod tests {
     }
 
     #[test]
-    fn netflix_points_follow_the_published_length_curve() {
-        assert_eq!(score_word(Mode::Netflix, "CAT", 1, false, false), 1);
-        assert_eq!(score_word(Mode::Netflix, "WORD", 1, false, false), 2);
-        assert_eq!(score_word(Mode::Netflix, "FIVES", 1, false, false), 3);
-        assert_eq!(score_word(Mode::Netflix, "LONGER", 1, false, false), 4);
+    fn party_points_follow_the_length_curve() {
+        assert_eq!(score_word(Mode::Party, "CAT", 1, false, false), 1);
+        assert_eq!(score_word(Mode::Party, "WORD", 1, false, false), 2);
+        assert_eq!(score_word(Mode::Party, "FIVES", 1, false, false), 3);
+        assert_eq!(score_word(Mode::Party, "LONGER", 1, false, false), 4);
     }
 
     #[test]
     fn validates_configurable_board_and_timer() {
         let mut game = GameState::new(1);
         let (seat, _) = game.join("Tester").unwrap();
-        game.start(seat, Mode::Netflix, 6, 120, false).unwrap();
+        game.start(seat, Mode::Party, 6, 120, false).unwrap();
         assert_eq!(game.board_size, 6);
         assert_eq!(game.board.as_ref().unwrap().letters.len(), 36);
         assert_eq!(game.duration_secs, 120);

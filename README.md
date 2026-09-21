@@ -30,13 +30,13 @@ On this machine, the current address is <http://192.168.0.105:8088>. The phone a
 ## How to play
 
 1. Create a room and share the four-letter code.
-2. Pick Classic or Netflix-style Party scoring, then choose a 4×4, 5×5, or 6×6 board and a 30–180 second timer. Each board size rolls its own classic, Big, or Super Boggle-style dice instead of sampling unrelated letters.
-3. Decide whether shared words cancel. The toggle is available in both scoring modes; it defaults on for Classic and off for Netflix-style Party.
+2. Pick Party or Classic scoring, then choose a 4×4, 5×5, or 6×6 board and a 30–180 second timer. Party scoring is the default. Each board size rolls its own classic, Big, or Super Boggle-style dice instead of sampling unrelated letters.
+3. Decide whether shared words cancel. The toggle is available in both scoring modes; it defaults off for Party and on for Classic.
 4. Drag across neighboring letters to trace a word, then release to submit it. Diagonals count, and the trace samples fast movement so you do not need to hit every pixel. Tapping still works with the Submit button as a fallback. A tile can only be used once in a word. Multi-letter tiles such as `Qu` contribute all their letters at once.
 5. Valid words score automatically for you in real time. Duplicate, disconnected, and unknown words explain what went wrong.
 6. When the clock ends, the recap shows every player’s words, each word’s points, the top score, and the longest find.
 
-Classic words score 1 point for 3–4 letters, 2 for 5, 3 for 6, 5 for 7, and 11 for 8+. Netflix-style Party words score 1 point for 3 letters and one additional point for every additional letter; in multiplayer, a word only one player found is worth double. Duplicate words do not score twice for the same player.
+Party words score 1 point for 3 letters and one additional point for every additional letter; in multiplayer, a word only one player found is worth double. Classic words score 1 point for 3–4 letters, 2 for 5, 3 for 6, 5 for 7, and 11 for 8+. Duplicate words do not score twice for the same player.
 
 ## Game history and stats
 

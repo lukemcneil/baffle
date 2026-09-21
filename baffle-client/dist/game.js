@@ -200,7 +200,7 @@ function renderGame() {
     showScreen(gameScreen);
     $('connection-state').innerHTML = '<span class="live-dot"></span> Live';
     $('game-room-code').textContent = currentRoom;
-    $('game-mode-pill').textContent = `${state.mode === 'netflix' ? 'PARTY' : 'CLASSIC'} · ${state.board.size}×${state.board.size}`;
+    $('game-mode-pill').textContent = `${state.mode === 'party' ? 'PARTY' : 'CLASSIC'} · ${state.board.size}×${state.board.size}`;
     renderBoard();
     renderScoreboard();
     renderLivePulse();
@@ -465,8 +465,8 @@ function renderGameOver() {
     const ordered = [...state.players].sort((a, b) => b.score - a.score);
     const winner = ordered[0];
     $('results-headline').textContent = winner?.is_me ? 'You baffled them all.' : `${winner?.name || 'Someone'} took the crown.`;
-    const modeLabel = state.mode === 'netflix' ? 'Netflix-style Party' : 'Classic';
-    const sharedLabel = state.cancel_shared_words ? 'shared words canceled' : state.mode === 'netflix' ? 'unique words doubled' : 'shared words allowed';
+    const modeLabel = state.mode === 'party' ? 'Party' : 'Classic';
+    const sharedLabel = state.cancel_shared_words ? 'shared words canceled' : state.mode === 'party' ? 'unique words doubled' : 'shared words allowed';
     $('results-subtitle').textContent = `${state.my_words.length} word${state.my_words.length === 1 ? '' : 's'} found by you · ${modeLabel} · ${state.board_size}×${state.board_size} · ${sharedLabel}`;
     const allFinds = ordered.flatMap(player => (player.words || []).map(found => ({ ...found, player })));
     const longestLength = allFinds.reduce((longest, found) => Math.max(longest, found.word.length), 0);
@@ -485,8 +485,8 @@ function renderGameOver() {
     possibleSearch.value = '';
     const possibleWords = state.possible_words || [];
     selectedPossibleWord = possibleWords[0]?.word || '';
-    $('possible-note').textContent = state.mode === 'netflix'
-        ? `Values show the maximum Netflix-style score${state.players.length > 1 ? ' with the unique-word bonus' : ''}. Green words were found by someone in the room.`
+    $('possible-note').textContent = state.mode === 'party'
+        ? `Values show the maximum Party score${state.players.length > 1 ? ' with the unique-word bonus' : ''}. Green words were found by someone in the room.`
         : 'Values use traditional Boggle scoring. Green words were found by someone in the room.';
     $('possible-summary').textContent = `${possibleWords.length} word${possibleWords.length === 1 ? '' : 's'} on this board · perfect play is ${pointsLabel(state.perfect_score || 0)}`;
     const historyButton = $('view-history-btn');
@@ -579,7 +579,7 @@ async function fetchJson(path) {
     return response.json();
 }
 function settingsLabel(settings) {
-    return `${settings.mode === 'netflix' ? 'Party' : 'Classic'} · ${settings.board_size}×${settings.board_size} · ${formatDuration(settings.duration_secs)} · shared ${settings.cancel_shared_words ? 'cancel' : 'score'}`;
+    return `${settings.mode === 'party' ? 'Party' : 'Classic'} · ${settings.board_size}×${settings.board_size} · ${formatDuration(settings.duration_secs)} · shared ${settings.cancel_shared_words ? 'cancel' : 'score'}`;
 }
 function formatDuration(seconds) { return seconds >= 60 && seconds % 60 === 0 ? `${seconds / 60}m` : `${seconds}s`; }
 function formatDate(timestamp) { return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(timestamp)); }
@@ -684,7 +684,7 @@ function playerGameRow(game) {
     return `<button class="history-row history-open" data-game-id="${game.game_id}"><span class="history-result${game.placement === 1 ? ' win' : ''}">${result}</span><span><strong>${game.score} points · ${game.word_count} words</strong><small>${formatDate(game.finished_at_ms)} · ${escapeHtml(settingsLabel(game.settings))}</small></span><b>${formatPercent(game.efficiency)} →</b></button>`;
 }
 async function renderLeaderboard() {
-    statsContent.innerHTML = `<div class="records-controls"><label>Rank by<select id="record-metric"><option value="efficiency">Board coverage</option><option value="score">Raw score</option></select></label><label>Mode<select id="record-mode"><option value="">All modes</option><option value="classic">Classic</option><option value="netflix">Party</option></select></label><label>Board<select id="record-board"><option value="">All sizes</option><option value="4">4×4</option><option value="5">5×5</option><option value="6">6×6</option></select></label></div><p id="records-explainer" class="stats-explainer">Board coverage compares your score with the best possible score on that exact board, so different formats stay fair.</p><div id="leaderboard-list" class="leaderboard-list"><div class="stats-loading">Ranking the wordsmiths…</div></div>`;
+    statsContent.innerHTML = `<div class="records-controls"><label>Rank by<select id="record-metric"><option value="efficiency">Board coverage</option><option value="score">Raw score</option></select></label><label>Mode<select id="record-mode"><option value="">All modes</option><option value="party">Party</option><option value="classic">Classic</option></select></label><label>Board<select id="record-board"><option value="">All sizes</option><option value="4">4×4</option><option value="5">5×5</option><option value="6">6×6</option></select></label></div><p id="records-explainer" class="stats-explainer">Board coverage compares your score with the best possible score on that exact board, so different formats stay fair.</p><div id="leaderboard-list" class="leaderboard-list"><div class="stats-loading">Ranking the wordsmiths…</div></div>`;
     const controls = ['record-metric', 'record-mode', 'record-board'];
     controls.forEach(id => $(id).addEventListener('change', () => { void loadLeaderboardRows(); }));
     await loadLeaderboardRows();
@@ -757,10 +757,10 @@ startButton.addEventListener('click', () => send({
     cancel_shared_words: cancelSharedToggle.checked
 }));
 modeSelect.addEventListener('change', () => {
-    const netflix = modeSelect.value === 'netflix';
-    cancelSharedToggle.checked = !netflix;
-    modeDescription.textContent = netflix
-        ? 'Netflix-style points: 3 letters score 1, then +1 per letter. A word only you found scores double.'
+    const party = modeSelect.value === 'party';
+    cancelSharedToggle.checked = !party;
+    modeDescription.textContent = party
+        ? 'Fast party points: 3 letters score 1, then +1 per letter. A word only you find scores double.'
         : 'Traditional point values. Unique words score normally; shared words cancel by default.';
 });
 submitButton.addEventListener('click', submitSelectedWord);

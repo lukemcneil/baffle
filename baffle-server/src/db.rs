@@ -320,7 +320,7 @@ impl Database {
                         found.submitted_ms as i64,
                         finder_count as i64,
                         finder_count > 1,
-                        state.mode == Mode::Netflix && state.players.len() > 1 && finder_count == 1,
+                        state.mode == Mode::Party && state.players.len() > 1 && finder_count == 1,
                     ],
                 )?;
             }
@@ -713,7 +713,8 @@ fn migrate(connection: &Connection) -> DbResult<()> {
          CREATE INDEX IF NOT EXISTS idx_game_players_name ON game_players(name_lower);
          CREATE INDEX IF NOT EXISTS idx_game_players_score ON game_players(final_score DESC);
          CREATE INDEX IF NOT EXISTS idx_player_words_word ON player_words(word);
-         PRAGMA user_version = 1;",
+         UPDATE games SET mode = 'party' WHERE mode = 'netflix';
+         PRAGMA user_version = 2;",
     )?;
     Ok(())
 }
@@ -907,12 +908,12 @@ fn load_rivals(connection: &Connection, name: &str) -> DbResult<Vec<RivalStats>>
 fn mode_name(mode: Mode) -> &'static str {
     match mode {
         Mode::Classic => "classic",
-        Mode::Netflix => "netflix",
+        Mode::Party => "party",
     }
 }
 
 fn mode_label(mode: &str) -> &'static str {
-    if mode == "netflix" {
+    if mode == "party" {
         "Party"
     } else {
         "Classic"
@@ -928,7 +929,7 @@ fn base_score(mode: Mode, word: &str) -> u32 {
             7 => 5,
             _ => 11,
         },
-        Mode::Netflix => word.len().saturating_sub(2) as u32,
+        Mode::Party => word.len().saturating_sub(2) as u32,
     }
 }
 
@@ -1050,7 +1051,7 @@ mod tests {
             .leaderboard(LeaderboardFilter {
                 limit: 10,
                 metric: "score",
-                mode: Some("netflix"),
+                mode: Some("party"),
                 ..Default::default()
             })
             .unwrap()
@@ -1060,7 +1061,7 @@ mod tests {
     #[test]
     fn preserves_shared_word_cancellations() {
         let db = Database::in_memory().unwrap();
-        let mut game = completed_game(Mode::Netflix, true);
+        let mut game = completed_game(Mode::Party, true);
         game.players[0].score = 0;
         game.players[1].score = 0;
         game.players[0].words[0] = FoundWord {
@@ -1081,5 +1082,22 @@ mod tests {
         assert_eq!(detail.players[0].canceled_points, 2);
         assert!(detail.players[0].words[0].is_shared);
         assert!(!detail.players[0].words[0].unique_bonus);
+    }
+
+    #[test]
+    fn migrates_the_legacy_mode_name_to_party() {
+        let db = Database::in_memory().unwrap();
+        let game = completed_game(Mode::Party, false);
+        let id = db
+            .save_game("PRTY", "party-series", 1, 1000, 61000, &game)
+            .unwrap();
+        {
+            let connection = db.connection.lock().unwrap();
+            connection
+                .execute("UPDATE games SET mode = 'netflix' WHERE id = ?1", [id])
+                .unwrap();
+            migrate(&connection).unwrap();
+        }
+        assert_eq!(db.game_detail(id).unwrap().unwrap().settings.mode, "party");
     }
 }
