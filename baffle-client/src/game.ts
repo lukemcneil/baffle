@@ -1,11 +1,12 @@
-type Mode = 'classic' | 'blitz' | 'mega';
+type Mode = 'classic' | 'netflix';
 type Phase = 'waiting' | 'playing' | 'game_over';
 
 interface Board { size: number; letters: string[]; }
 interface FoundWord { word: string; points: number; }
-interface RecentFind { player: string; points: number; word_length: number; at_ms: number; }
+interface RecentFind { player: string; word: string; points: number; word_length: number; at_ms: number; }
 interface Player { seat: number; name: string; score: number; word_count: number; connected: boolean; is_me: boolean; words?: FoundWord[]; }
-interface GameState { phase: Phase; mode: Mode; board: Board | null; duration_secs: number; ends_at_ms: number | null; my_seat: number; my_score: number; my_words: FoundWord[]; possible_words?: FoundWord[]; perfect_score?: number; recent_activity?: RecentFind[]; players: Player[]; }
+interface GameState { phase: Phase; mode: Mode; board_size: number; cancel_shared_words: boolean; board: Board | null; duration_secs: number; ends_at_ms: number | null; my_seat: number; my_score: number; my_words: FoundWord[]; possible_words?: FoundWord[]; perfect_score?: number; recent_activity?: RecentFind[]; players: Player[]; }
+interface AcceptedWord { word_accepted: boolean; points: number; shared_cancelled: boolean; unique_bonus: boolean; }
 interface Room { code: string; players: string[]; player_count: number; max_players: number; }
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
@@ -20,6 +21,9 @@ const createButton = $('create-btn') as HTMLButtonElement;
 const joinButton = $('join-btn') as HTMLButtonElement;
 const startButton = $('start-btn') as HTMLButtonElement;
 const modeSelect = $('mode-select') as HTMLSelectElement;
+const boardSizeSelect = $('board-size-select') as HTMLSelectElement;
+const timerSelect = $('timer-select') as HTMLSelectElement;
+const cancelSharedToggle = $('cancel-shared-toggle') as HTMLInputElement;
 const modeDescription = $('mode-description');
 const boardEl = $('board');
 const boardWrap = $('board-wrap');
@@ -82,7 +86,7 @@ function connect(code: string): void {
   socket = new WebSocket(wsUrl(`/game/${encodeURIComponent(currentRoom)}?player=${encodeURIComponent(name)}`));
   socket.addEventListener('open', () => { lobbyStatus.textContent = ''; });
   socket.addEventListener('message', event => {
-    const message = JSON.parse(event.data) as GameState | { Err: string } | { word_accepted: boolean; points: number } | { rematch_code: string };
+    const message = JSON.parse(event.data) as GameState | { Err: string } | AcceptedWord | { rematch_code: string };
     if ('Err' in message) {
       const submissionErrors = ['NotAWord', 'NotOnBoard', 'DuplicateWord', 'InvalidWord', 'GameOver'];
       const rejectedWord = state?.phase === 'playing' && submissionErrors.includes(message.Err) ? pendingWords.shift() : undefined;
@@ -96,6 +100,7 @@ function connect(code: string): void {
         NotOnBoard: tracedWord ? `${tracedWord} is not a connected path.` : 'Those letters are not connected on the grid.',
         DuplicateWord: tracedWord ? `${tracedWord} was already found — try another!` : 'Already found — try another!',
         InvalidWord: tracedWord ? `${tracedWord} needs to be 3–25 letters.` : 'Words need 3–25 letters.',
+        InvalidSettings: 'Choose a 4×4–6×6 board and a listed timer.',
         GameOver: 'Time is up!'
       };
       if (state?.phase === 'playing') {
@@ -110,7 +115,14 @@ function connect(code: string): void {
       if (message.Err === 'RoomExpired') backToLobby();
       return;
     }
-    if ('word_accepted' in message) { celebrateWord(pendingWords.shift() || 'Nice!', message.points); showToast(`+${message.points} point${message.points === 1 ? '' : 's'} — nice find!`); return; }
+    if ('word_accepted' in message) {
+      const word = pendingWords.shift() || 'Nice!';
+      celebrateWord(word, message.points, message.shared_cancelled ? 'shared · canceled' : message.unique_bonus ? 'unique word!' : undefined);
+      if (message.shared_cancelled) showToast(`${word.toUpperCase()} is shared — canceled for everyone.`, true);
+      else if (message.unique_bonus) showToast(`+${message.points} points — unique word bonus!`);
+      else showToast(`+${message.points} point${message.points === 1 ? '' : 's'} — nice find!`);
+      return;
+    }
     if ('rematch_code' in message) { connect(message.rematch_code); return; }
     state = message as GameState;
     if (state.phase === 'waiting') renderWaiting();
@@ -150,7 +162,9 @@ function renderWaiting(): void {
   $('player-count').textContent = `${state.players.filter(player => player.connected).length}/${8}`;
   const list = $('waiting-players'); list.innerHTML = '';
   state.players.filter(player => player.connected).forEach(player => { const item = document.createElement('div'); item.className = `waiting-player${player.seat === 0 ? ' host' : ''}`; item.textContent = `${player.name}${player.seat === 0 ? ' · host' : ''}`; list.appendChild(item); });
-  const isHost = state.my_seat === 0; startButton.disabled = !isHost; modeSelect.disabled = !isHost;
+  const isHost = state.my_seat === 0;
+  startButton.disabled = !isHost;
+  [modeSelect, boardSizeSelect, timerSelect, cancelSharedToggle].forEach(control => { control.disabled = !isHost; });
   $('waiting-hint').textContent = isHost ? 'You are the host. Start when everyone is ready.' : 'Waiting for the host to start the hunt…';
 }
 
@@ -159,21 +173,21 @@ function renderGame(): void {
   showScreen(gameScreen);
   $('connection-state').innerHTML = '<span class="live-dot"></span> Live';
   $('game-room-code').textContent = currentRoom;
-  $('game-mode-pill').textContent = state.mode === 'mega' ? 'MEGA GRID' : state.mode.toUpperCase();
+  $('game-mode-pill').textContent = `${state.mode === 'netflix' ? 'PARTY' : 'CLASSIC'} · ${state.board.size}×${state.board.size}`;
   renderBoard(); renderScoreboard(); renderLivePulse(); renderFinds(); updateTimer();
   if (timerHandle === null) timerHandle = window.setInterval(updateTimer, 500);
 }
 
 function renderBoard(): void {
   if (!state?.board) return;
-  const board = state.board; boardEl.className = `board${board.size === 5 ? ' mega' : ''}`; boardEl.style.gridTemplateColumns = `repeat(${board.size}, 1fr)`; boardEl.innerHTML = '';
+  const board = state.board; boardEl.className = `board${board.size >= 5 ? ' mega' : ''}`; boardEl.style.gridTemplateColumns = `repeat(${board.size}, 1fr)`; boardEl.innerHTML = '';
   board.letters.forEach((letter, index) => {
     const tile = document.createElement('button'); tile.type = 'button'; tile.className = 'tile'; tile.textContent = letter; tile.dataset.index = String(index); tile.dataset.order = String(selectedPath.indexOf(index) + 1); tile.setAttribute('aria-label', `Letter ${letter}, position ${index + 1}`);
     if (selectedPath.includes(index)) tile.classList.add('selected');
     tile.addEventListener('click', () => { if (performance.now() < clickGuardUntil) return; chooseTile(index); }); boardEl.appendChild(tile);
   });
   currentWordEl.innerHTML = selectedPath.length ? selectedPath.map(index => board.letters[index]).join('') + '<span class="cursor"></span>' : 'Drag letters to begin<span class="cursor"></span>';
-  submitButton.disabled = selectedPath.length < 3;
+  submitButton.disabled = selectedWord().length < 3;
   drawPath();
 }
 
@@ -304,14 +318,16 @@ function endDrag(event: PointerEvent): void {
   isDragging = false;
   clickGuardUntil = performance.now() + 300;
   if (boardEl.hasPointerCapture(event.pointerId)) boardEl.releasePointerCapture(event.pointerId);
-  if (!cancelled && dragMoved && selectedPath.length >= 3) submitSelectedWord();
+  if (!cancelled && dragMoved && selectedWord().length >= 3) submitSelectedWord();
   else if (cancelled || dragMoved) { selectedPath = []; renderBoard(); }
   dragPointerId = null;
 }
 
-function submitSelectedWord(): void { if (!state?.board || selectedPath.length < 3) return; if (socket?.readyState !== WebSocket.OPEN) { showToast('Reconnecting — try that word again.', true); return; } const word = selectedPath.map(index => state!.board!.letters[index]).join(''); pendingWords.push(word); send({ action: 'submit_word', word }); selectedPath = []; renderBoard(); }
+function selectedWord(): string { return state?.board ? selectedPath.map(index => state!.board!.letters[index]).join('') : ''; }
 
-function celebrateWord(word: string, points: number): void { const burst = document.createElement('div'); burst.className = 'word-burst'; burst.innerHTML = `<strong>${escapeHtml(word)}</strong><span>+${points} point${points === 1 ? '' : 's'}</span><i>✦</i><i>✦</i><i>✦</i>`; boardWrap.appendChild(burst); boardWrap.classList.remove('word-win'); void boardWrap.clientWidth; boardWrap.classList.add('word-win'); window.setTimeout(() => { burst.remove(); boardWrap.classList.remove('word-win'); }, 1200); }
+function submitSelectedWord(): void { if (!state?.board || selectedWord().length < 3) return; if (socket?.readyState !== WebSocket.OPEN) { showToast('Reconnecting — try that word again.', true); return; } const word = selectedWord(); pendingWords.push(word); send({ action: 'submit_word', word }); selectedPath = []; renderBoard(); }
+
+function celebrateWord(word: string, points: number, note?: string): void { const burst = document.createElement('div'); burst.className = `word-burst${points === 0 ? ' canceled' : ''}`; burst.innerHTML = `<strong>${escapeHtml(word)}</strong><span>${note ? escapeHtml(note) : `+${points} point${points === 1 ? '' : 's'}`}</span><i>✦</i><i>✦</i><i>✦</i>`; boardWrap.appendChild(burst); boardWrap.classList.remove('word-win'); void boardWrap.clientWidth; boardWrap.classList.add('word-win'); window.setTimeout(() => { burst.remove(); boardWrap.classList.remove('word-win'); }, 1200); }
 
 function send(payload: object): void { if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(payload)); }
 
@@ -326,7 +342,7 @@ function renderFinds(): void {
   $('your-score').innerHTML = `${state.my_score} <small>pts</small>`; $('found-count').textContent = String(state.my_words.length);
   const list = $('word-list'); list.innerHTML = '';
   if (!state.my_words.length) { list.innerHTML = '<p class="empty-finds">Your first find is hiding in there.</p>'; return; }
-  [...state.my_words].reverse().forEach(found => { const chip = document.createElement('span'); chip.className = 'word-chip'; chip.innerHTML = `<span>${escapeHtml(found.word)}</span><b>+${found.points}</b>`; list.appendChild(chip); });
+  [...state.my_words].reverse().forEach(found => { const chip = document.createElement('span'); chip.className = `word-chip${found.points === 0 ? ' canceled' : ''}`; chip.innerHTML = `<span>${escapeHtml(found.word)}</span><b>${wordPointsLabel(found)}</b>`; list.appendChild(chip); });
 }
 
 function renderLivePulse(): void {
@@ -353,6 +369,7 @@ function updateTimer(): void {
 }
 
 function pointsLabel(points: number): string { return `${points} point${points === 1 ? '' : 's'}`; }
+function wordPointsLabel(found: FoundWord): string { return found.points === 0 ? 'shared' : `+${found.points}`; }
 
 function renderGameOver(): void {
   if (!state) return;
@@ -360,19 +377,24 @@ function renderGameOver(): void {
   showScreen(gameOver);
   const ordered = [...state.players].sort((a, b) => b.score - a.score); const winner = ordered[0];
   $('results-headline').textContent = winner?.is_me ? 'You baffled them all.' : `${winner?.name || 'Someone'} took the crown.`;
-  $('results-subtitle').textContent = `${state.my_words.length} word${state.my_words.length === 1 ? '' : 's'} found by you · ${state.mode === 'mega' ? 'Mega Grid' : state.mode[0].toUpperCase() + state.mode.slice(1)}`;
+  const modeLabel = state.mode === 'netflix' ? 'Netflix-style Party' : 'Classic';
+  const sharedLabel = state.cancel_shared_words ? 'shared words canceled' : state.mode === 'netflix' ? 'unique words doubled' : 'shared words allowed';
+  $('results-subtitle').textContent = `${state.my_words.length} word${state.my_words.length === 1 ? '' : 's'} found by you · ${modeLabel} · ${state.board_size}×${state.board_size} · ${sharedLabel}`;
   const allFinds = ordered.flatMap(player => (player.words || []).map(found => ({ ...found, player })));
   const longestLength = allFinds.reduce((longest, found) => Math.max(longest, found.word.length), 0);
   const longestFinds = allFinds.filter(found => found.word.length === longestLength);
-  const longestLabel = longestFinds.length ? longestFinds.map(found => `${escapeHtml(found.word)} · ${escapeHtml(found.player.name)} (+${found.points})`).join(' · ') : 'No words found';
+  const longestLabel = longestFinds.length ? longestFinds.map(found => `${escapeHtml(found.word)} · ${escapeHtml(found.player.name)} (${wordPointsLabel(found)})`).join(' · ') : 'No words found';
   $('results-insights').innerHTML = `<div class="insight-card"><span>TOP SCORE</span><strong>${escapeHtml(winner?.name || '—')}</strong><small>${pointsLabel(winner?.score || 0)}</small></div><div class="insight-card longest"><span>LONGEST FIND</span><strong>${longestLabel}</strong><small>${longestFinds.length > 1 ? 'Tied for longest' : longestLength ? `${longestLength} letters` : 'Keep hunting'}</small></div><div class="insight-card"><span>WORDS FOUND</span><strong>${allFinds.length}</strong><small>Across ${ordered.length} player${ordered.length === 1 ? '' : 's'}</small></div>`;
   const scoreboard = $('final-scoreboard'); scoreboard.innerHTML = '';
   ordered.forEach((player, index) => { const row = document.createElement('div'); row.className = `final-row${index === 0 ? ' winner' : ''}`; row.innerHTML = `<span class="final-rank">${index === 0 ? '★' : index + 1}</span><span class="avatar">${escapeHtml(player.name.slice(0, 1).toUpperCase())}</span><span class="final-name"><strong>${escapeHtml(player.name)}${player.is_me ? ' · you' : ''}</strong><small>${player.word_count} word${player.word_count === 1 ? '' : 's'} found · ${pointsLabel(player.score)}</small></span><span class="final-score">${player.score} pts</span>`; scoreboard.appendChild(row); });
   const wordGroups = $('results-word-groups'); wordGroups.innerHTML = '<p class="results-section-label">EVERYONE\'S FINDS</p>';
-  ordered.forEach(player => { const group = document.createElement('section'); group.className = 'results-word-group'; const words = player.words || []; group.innerHTML = `<div class="results-player-heading"><span class="avatar">${escapeHtml(player.name.slice(0, 1).toUpperCase())}</span><div><strong>${escapeHtml(player.name)}${player.is_me ? ' · you' : ''}</strong><small>${words.length} word${words.length === 1 ? '' : 's'} · ${pointsLabel(player.score)}</small></div></div>`; const wordsEl = document.createElement('div'); wordsEl.className = 'results-word-list'; if (!words.length) wordsEl.innerHTML = '<span class="no-results-words">No finds this round.</span>'; else words.forEach(found => { const chip = document.createElement('span'); chip.className = `results-word-chip${found.word.length === longestLength ? ' longest' : ''}`; chip.innerHTML = `<strong>${escapeHtml(found.word)}</strong><b>+${found.points}</b>${found.word.length === longestLength ? '<i>longest</i>' : ''}`; wordsEl.appendChild(chip); }); group.appendChild(wordsEl); wordGroups.appendChild(group); });
+  ordered.forEach(player => { const group = document.createElement('section'); group.className = 'results-word-group'; const words = player.words || []; group.innerHTML = `<div class="results-player-heading"><span class="avatar">${escapeHtml(player.name.slice(0, 1).toUpperCase())}</span><div><strong>${escapeHtml(player.name)}${player.is_me ? ' · you' : ''}</strong><small>${words.length} word${words.length === 1 ? '' : 's'} · ${pointsLabel(player.score)}</small></div></div>`; const wordsEl = document.createElement('div'); wordsEl.className = 'results-word-list'; if (!words.length) wordsEl.innerHTML = '<span class="no-results-words">No finds this round.</span>'; else words.forEach(found => { const chip = document.createElement('span'); chip.className = `results-word-chip${found.word.length === longestLength ? ' longest' : ''}${found.points === 0 ? ' canceled' : ''}`; chip.innerHTML = `<strong>${escapeHtml(found.word)}</strong><b>${wordPointsLabel(found)}</b>${found.word.length === longestLength ? '<i>longest</i>' : ''}`; wordsEl.appendChild(chip); }); group.appendChild(wordsEl); wordGroups.appendChild(group); });
   possibleSearch.value = '';
   const possibleWords = state.possible_words || [];
   selectedPossibleWord = possibleWords[0]?.word || '';
+  $('possible-note').textContent = state.mode === 'netflix'
+    ? `Values show the maximum Netflix-style score${state.players.length > 1 ? ' with the unique-word bonus' : ''}. Green words were found by someone in the room.`
+    : 'Values use traditional Boggle scoring. Green words were found by someone in the room.';
   $('possible-summary').textContent = `${possibleWords.length} word${possibleWords.length === 1 ? '' : 's'} on this board · perfect play is ${pointsLabel(state.perfect_score || 0)}`;
   renderWordMap();
   renderPossibleWords();
@@ -391,13 +413,15 @@ function renderPossibleWords(): void {
 }
 
 function findWordPath(board: Board, word: string): number[] | null {
-  const letters = [...word.toUpperCase()];
+  const target = word.toUpperCase();
   const used = new Array(board.letters.length).fill(false) as boolean[];
   const path: number[] = [];
   function visit(index: number, position: number): boolean {
-    if (used[index] || board.letters[index] !== letters[position]) return false;
+    const tile = board.letters[index].toUpperCase();
+    if (used[index] || !target.startsWith(tile, position)) return false;
     path.push(index);
-    if (position === letters.length - 1) return true;
+    const nextPosition = position + tile.length;
+    if (nextPosition === target.length) return true;
     used[index] = true;
     const row = Math.floor(index / board.size);
     const col = index % board.size;
@@ -406,7 +430,7 @@ function findWordPath(board: Board, word: string): number[] | null {
         if (!rowDelta && !colDelta) continue;
         const nextRow = row + rowDelta;
         const nextCol = col + colDelta;
-        if (nextRow >= 0 && nextRow < board.size && nextCol >= 0 && nextCol < board.size && visit(nextRow * board.size + nextCol, position + 1)) return true;
+        if (nextRow >= 0 && nextRow < board.size && nextCol >= 0 && nextCol < board.size && visit(nextRow * board.size + nextCol, nextPosition)) return true;
       }
     }
     used[index] = false;
@@ -424,7 +448,7 @@ function renderWordMap(): void {
   const path = word ? findWordPath(board, word) : null;
   $('possible-map-word').textContent = word || 'No playable words';
   $('possible-map-hint').textContent = path ? `${word.length} letters · one valid path highlighted` : 'No word path to show on this board.';
-  possibleBoardEl.className = `word-map-board${board.size === 5 ? ' mega' : ''}`;
+  possibleBoardEl.className = `word-map-board${board.size >= 5 ? ' mega' : ''}`;
   possibleBoardEl.style.gridTemplateColumns = `repeat(${board.size}, 1fr)`;
   possibleBoardEl.innerHTML = '';
   board.letters.forEach((letter, index) => { const tile = document.createElement('span'); tile.className = `word-map-tile${path?.includes(index) ? ' active' : ''}`; tile.textContent = letter; if (path) tile.dataset.order = String(path.indexOf(index) + 1); possibleBoardEl.appendChild(tile); });
@@ -440,8 +464,20 @@ function backToLobby(): void { if (socket) { socket.close(); socket = null; } st
 createButton.addEventListener('click', () => connect(roomCode()));
 joinButton.addEventListener('click', () => connect(roomCodeInput.value.trim()));
 roomCodeInput.addEventListener('keydown', event => { if (event.key === 'Enter') connect(roomCodeInput.value.trim()); });
-startButton.addEventListener('click', () => send({ action: 'start', mode: modeSelect.value }));
-modeSelect.addEventListener('change', () => { const descriptions: Record<string, string> = { classic: 'The original pressure cooker. Plenty of time for a big score.', blitz: 'One minute. Zero mercy. Every second counts.', mega: 'A roomier 5×5 grid for explorers who like their chaos extra large.' }; modeDescription.textContent = descriptions[modeSelect.value]; });
+startButton.addEventListener('click', () => send({
+  action: 'start',
+  mode: modeSelect.value,
+  board_size: Number(boardSizeSelect.value),
+  duration_secs: Number(timerSelect.value),
+  cancel_shared_words: cancelSharedToggle.checked
+}));
+modeSelect.addEventListener('change', () => {
+  const netflix = modeSelect.value === 'netflix';
+  cancelSharedToggle.checked = !netflix;
+  modeDescription.textContent = netflix
+    ? 'Netflix-style points: 3 letters score 1, then +1 per letter. A word only you found scores double.'
+    : 'Traditional point values. Unique words score normally; shared words cancel by default.';
+});
 submitButton.addEventListener('click', submitSelectedWord);
 $('clear-btn').addEventListener('click', () => { selectedPath = []; renderBoard(); });
 $('copy-link-btn').addEventListener('click', async () => { await navigator.clipboard?.writeText(`${location.origin}${location.pathname}?room=${currentRoom}`); showToast('Invite link copied.'); });

@@ -1,7 +1,7 @@
 #[macro_use]
 extern crate rocket;
 
-use game::{ActionError, ClientAction, GameState, Phase};
+use game::{ActionError, ClientAction, GameState, Phase, SubmissionResult};
 use rocket::fairing::{Fairing, Info, Kind};
 use rocket::fs::FileServer;
 use rocket::futures::lock::Mutex;
@@ -63,7 +63,7 @@ async fn game_socket(
         loop {
             tokio::select! {
             incoming = stream.next() => match incoming { Some(Ok(message)) => handle_message(message, &code, seat, rooms.clone(), &mut stream, &sender, &lobby_sender).await, _ => break },
-                update = updates.recv() => { if update.is_err() { break; } if let Some(room) = rooms.lock().await.0.get(&code) { let _ = stream.send(Message::Text(snapshot(&room.state, seat))).await; } else { break; } }
+                update = updates.recv() => { if update.is_err() { break; } else if let Some(room) = rooms.lock().await.0.get(&code) { let _ = stream.send(Message::Text(snapshot(&room.state, seat))).await; } else { break; } }
             }
         }
         let mut all = rooms.lock().await; if let Some(room) = all.0.get_mut(&code) { room.state.disconnect(seat, connection_id); room.last_activity = Instant::now(); let _ = room.sender.send(()); }
@@ -99,7 +99,7 @@ async fn handle_message(
         let mut all = rooms.lock().await;
         let new_code = match all.0.get(code) {
             Some(room) if room.state.phase == Phase::GameOver => {
-                room.rematch_code.clone().unwrap_or_else(|| room_code())
+                room.rematch_code.clone().unwrap_or_else(room_code)
             }
             _ => {
                 let _ = stream
@@ -132,7 +132,7 @@ async fn handle_message(
         let _ = lobby.send(());
         return;
     }
-    let mut accepted: Option<u32> = None;
+    let mut accepted: Option<SubmissionResult> = None;
     let mut started = false;
     let mut error: Option<ActionError> = None;
     {
@@ -141,9 +141,20 @@ async fn handle_message(
             room.last_activity = Instant::now();
             room.state.tick();
             let result = match action {
-                ClientAction::Start { mode } => {
+                ClientAction::Start {
+                    mode,
+                    board_size,
+                    duration_secs,
+                    cancel_shared_words,
+                } => {
                     started = true;
-                    room.state.start(seat, mode).map(|_| 0)
+                    room.state
+                        .start(seat, mode, board_size, duration_secs, cancel_shared_words)
+                        .map(|_| SubmissionResult {
+                            points: 0,
+                            shared_cancelled: false,
+                            unique_bonus: false,
+                        })
                 }
                 ClientAction::SubmitWord { word } => room.state.submit_word(seat, &word),
                 ClientAction::Rematch => unreachable!(),
@@ -166,11 +177,11 @@ async fn handle_message(
             .await;
         return;
     }
-    if let Some(points) = accepted {
+    if let Some(result) = accepted {
         let _ = stream
             .send(Message::Text(format!(
-                "{{\"word_accepted\":true,\"points\":{}}}",
-                points
+                "{{\"word_accepted\":true,\"points\":{},\"shared_cancelled\":{},\"unique_bonus\":{}}}",
+                result.points, result.shared_cancelled, result.unique_bonus
             )))
             .await;
     }

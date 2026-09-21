@@ -52,11 +52,15 @@
             <div class="setup-divider"></div>
             <label class="section-kicker" for="mode-select">Choose your flavor</label>
             <select id="mode-select">
-              <option value="classic">Classic · 3 minutes · 4×4</option>
-              <option value="blitz">Blitz · 60 seconds · 4×4</option>
-              <option value="mega">Mega Grid · 3 minutes · 5×5</option>
+              <option value="classic">Classic Boggle scoring</option>
+              <option value="netflix">Netflix-style party scoring</option>
             </select>
-            <div id="mode-description" class="mode-description">The original pressure cooker. Plenty of time for a big score.</div>
+            <div id="mode-description" class="mode-description">Traditional point values. Unique words score normally; shared words cancel by default.</div>
+            <div class="game-options">
+              <label><span>Board</span><select id="board-size-select"><option value="4">4×4 · Classic</option><option value="5">5×5 · Big</option><option value="6">6×6 · Huge</option></select></label>
+              <label><span>Timer</span><select id="timer-select"><option value="30">30 seconds</option><option value="60">1 minute</option><option value="90">90 seconds</option><option value="120">2 minutes</option><option value="180" selected>3 minutes</option></select></label>
+            </div>
+            <label class="toggle-option" for="cancel-shared-toggle"><input id="cancel-shared-toggle" type="checkbox" checked><span class="toggle-track" aria-hidden="true"></span><span><strong>Cancel shared words</strong><small>If two players find the same word, it scores zero for both.</small></span></label>
             <button id="start-btn" class="primary-button">Start the hunt <span>→</span></button>
             <p id="waiting-hint" class="hint">You are the host. Start when everyone is ready.</p>
           </div>
@@ -103,12 +107,12 @@
         <div id="final-scoreboard" class="final-scoreboard"></div>
         <div id="results-word-groups" class="results-word-groups"></div>
         <section class="word-map-section"><div class="possible-heading"><div><p class="results-section-label">WORD MAP</p><h3 id="possible-map-word">Pick a word</h3><p id="possible-map-hint" class="muted-copy">Tap any word below to trace it on the grid.</p></div></div><div id="possible-map-wrap" class="possible-map-wrap"><svg id="possible-path-line" class="possible-path-line" aria-hidden="true"><polyline id="possible-selection-line" points=""></polyline></svg><div id="possible-board" class="word-map-board" aria-label="Word path map"></div></div></section>
-        <section class="possible-section"><div class="possible-heading"><div><p class="results-section-label">THE WHOLE GRID</p><h3>Every possible word</h3><p id="possible-summary" class="muted-copy"></p></div><input id="possible-search" type="search" placeholder="Filter words" aria-label="Filter possible words"></div><p class="possible-note">Values use standard Boggle scoring. Green words were found by someone in the room.</p><div id="possible-word-list" class="possible-word-list"></div></section>
+        <section class="possible-section"><div class="possible-heading"><div><p class="results-section-label">THE WHOLE GRID</p><h3>Every possible word</h3><p id="possible-summary" class="muted-copy"></p></div><input id="possible-search" type="search" placeholder="Filter words" aria-label="Filter possible words"></div><p id="possible-note" class="possible-note">Green words were found by someone in the room.</p><div id="possible-word-list" class="possible-word-list"></div></section>
         <div class="results-actions"><button id="rematch-btn" class="primary-button">Run it back <span>↗</span></button><button id="results-lobby-btn" class="secondary-button">Back to lobby</button></div>
       </div>
     </section>
   </main>
-  <div id="rules-modal" class="modal hidden"><div class="modal-card"><button id="close-rules-btn" class="modal-close">×</button><p class="eyebrow">The tiny rulebook</p><h2>How to play</h2><div class="rule-row"><span>01</span><p><strong>Trace a word.</strong> Drag loosely across neighboring letters—up, down, sideways, or diagonal. The grid snaps to your path.</p></div><div class="rule-row"><span>02</span><p><strong>Mind your paws.</strong> You cannot use the same tile twice in one word.</p></div><div class="rule-row"><span>03</span><p><strong>Score big.</strong> 3–4 letters score 1, then longer words climb fast.</p></div><div class="rule-row"><span>04</span><p><strong>Watch the pulse.</strong> The live panel shows who leads and who has found words recently.</p></div><div class="rule-row"><span>05</span><p><strong>Race together.</strong> Everyone hunts the same grid. First to find it does not matter—your score does.</p></div></div></div>
+  <div id="rules-modal" class="modal hidden"><div class="modal-card"><button id="close-rules-btn" class="modal-close">×</button><p class="eyebrow">The tiny rulebook</p><h2>How to play</h2><div class="rule-row"><span>01</span><p><strong>Trace a word.</strong> Drag loosely across neighboring letters—up, down, sideways, or diagonal. The grid snaps to your path.</p></div><div class="rule-row"><span>02</span><p><strong>Mind your paws.</strong> You cannot use the same tile twice in one word. A <strong>Qu</strong> tile supplies both letters at once.</p></div><div class="rule-row"><span>03</span><p><strong>Score big.</strong> Classic uses traditional Boggle values. Netflix-style gives one point for three letters, then one more per letter, with double points for a word only you found.</p></div><div class="rule-row"><span>04</span><p><strong>Watch the pulse.</strong> The live panel shows who leads and who has found words recently.</p></div><div class="rule-row"><span>05</span><p><strong>Know the room rule.</strong> If shared-word cancellation is on, any word found by multiple players scores zero for all of them.</p></div></div></div>
   <script src="dist/game.js"></script>
 </body>
 </html>

@@ -61,9 +61,10 @@ fn collect_from(
     if used[index] {
         return;
     }
+    let original_length = current.len();
     current.push_str(&board.letters[index].to_ascii_lowercase());
     if !prefixes().contains(current.as_str()) {
-        current.pop();
+        current.truncate(original_length);
         return;
     }
     if current.len() >= 3 && dictionary().contains(current.as_str()) {
@@ -92,7 +93,7 @@ fn collect_from(
         }
         used[index] = false;
     }
-    current.pop();
+    current.truncate(original_length);
 }
 
 #[cfg(test)]
@@ -121,5 +122,15 @@ mod tests {
         let words = possible_words(&board);
         assert!(words.iter().any(|word| word == "sue"));
         assert_eq!(words.iter().filter(|word| *word == "sue").count(), 1);
+    }
+
+    #[test]
+    fn treats_qu_as_one_tile_and_two_letters() {
+        let board = Board {
+            size: 2,
+            letters: vec!["QU".into(), "I".into(), "T".into(), "X".into()],
+        };
+        let words = possible_words(&board);
+        assert!(words.iter().any(|word| word == "quit"));
     }
 }

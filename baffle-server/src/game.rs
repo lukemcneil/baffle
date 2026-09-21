@@ -1,32 +1,15 @@
 use rand::{seq::SliceRandom, thread_rng};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::words;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Mode {
     Classic,
-    Blitz,
-    Mega,
-}
-
-impl Mode {
-    pub fn size(&self) -> usize {
-        if matches!(self, Mode::Mega) {
-            5
-        } else {
-            4
-        }
-    }
-    pub fn duration_secs(&self) -> u64 {
-        if matches!(self, Mode::Blitz) {
-            60
-        } else {
-            180
-        }
-    }
+    Netflix,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -44,6 +27,8 @@ pub struct FoundWord {
 #[derive(Debug, Clone, Serialize)]
 pub struct RecentFind {
     pub player: String,
+    #[serde(skip_serializing)]
+    pub word: String,
     pub points: u32,
     pub word_length: usize,
     pub at_ms: u64,
@@ -70,6 +55,8 @@ pub enum Phase {
 pub struct GameState {
     pub phase: Phase,
     pub mode: Mode,
+    pub board_size: usize,
+    pub cancel_shared_words: bool,
     pub board: Option<Board>,
     pub players: Vec<Player>,
     pub duration_secs: u64,
@@ -86,6 +73,8 @@ pub struct GameState {
 pub struct ClientState {
     pub phase: &'static str,
     pub mode: Mode,
+    pub board_size: usize,
+    pub cancel_shared_words: bool,
     pub board: Option<Board>,
     pub duration_secs: u64,
     pub ends_at_ms: Option<u64>,
@@ -112,9 +101,23 @@ pub struct ClientPlayer {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum ClientAction {
-    Start { mode: Mode },
-    SubmitWord { word: String },
+    Start {
+        mode: Mode,
+        board_size: usize,
+        duration_secs: u64,
+        cancel_shared_words: bool,
+    },
+    SubmitWord {
+        word: String,
+    },
     Rematch,
+}
+
+#[derive(Debug)]
+pub struct SubmissionResult {
+    pub points: u32,
+    pub shared_cancelled: bool,
+    pub unique_bonus: bool,
 }
 
 #[derive(Debug)]
@@ -130,6 +133,7 @@ pub enum ActionError {
     DuplicateWord,
     GameOver,
     InvalidSeat,
+    InvalidSettings,
 }
 
 impl std::fmt::Display for ActionError {
@@ -146,6 +150,7 @@ impl std::fmt::Display for ActionError {
             ActionError::DuplicateWord => "DuplicateWord",
             ActionError::GameOver => "GameOver",
             ActionError::InvalidSeat => "InvalidSeat",
+            ActionError::InvalidSettings => "InvalidSettings",
         };
         f.write_str(text)
     }
@@ -156,6 +161,8 @@ impl GameState {
         Self {
             phase: Phase::Waiting,
             mode: Mode::Classic,
+            board_size: 4,
+            cancel_shared_words: true,
             board: None,
             players: Vec::new(),
             duration_secs: 180,
@@ -215,7 +222,14 @@ impl GameState {
         }
     }
 
-    pub fn start(&mut self, seat: usize, mode: Mode) -> Result<(), ActionError> {
+    pub fn start(
+        &mut self,
+        seat: usize,
+        mode: Mode,
+        board_size: usize,
+        duration_secs: u64,
+        cancel_shared_words: bool,
+    ) -> Result<(), ActionError> {
         if seat != 0 {
             return Err(ActionError::NotHost);
         }
@@ -225,9 +239,14 @@ impl GameState {
         if self.players.is_empty() {
             return Err(ActionError::NotEnoughPlayers);
         }
+        if !matches!(board_size, 4..=6) || !matches!(duration_secs, 30 | 60 | 90 | 120 | 180) {
+            return Err(ActionError::InvalidSettings);
+        }
         self.mode = mode;
-        self.duration_secs = self.mode.duration_secs();
-        self.board = Some(make_board(self.mode.size()));
+        self.board_size = board_size;
+        self.duration_secs = duration_secs;
+        self.cancel_shared_words = cancel_shared_words;
+        self.board = Some(make_board(self.board_size));
         self.possible_words = None;
         self.perfect_score = None;
         for p in &mut self.players {
@@ -257,7 +276,11 @@ impl GameState {
         }
     }
 
-    pub fn submit_word(&mut self, seat: usize, raw_word: &str) -> Result<u32, ActionError> {
+    pub fn submit_word(
+        &mut self,
+        seat: usize,
+        raw_word: &str,
+    ) -> Result<SubmissionResult, ActionError> {
         if self.phase != Phase::Playing {
             return Err(if self.phase == Phase::GameOver {
                 ActionError::GameOver
@@ -276,23 +299,40 @@ impl GameState {
         if !can_trace(board, &word) {
             return Err(ActionError::NotOnBoard);
         }
-        let base = base_points(&word);
-        let points = base;
-        let player = self.players.get_mut(seat).ok_or(ActionError::InvalidSeat)?;
+        let player = self.players.get(seat).ok_or(ActionError::InvalidSeat)?;
         if player.words.iter().any(|found| found.word == word) {
             return Err(ActionError::DuplicateWord);
         }
         let player_name = player.name.clone();
         let word_length = word.len();
-        player.score += points;
-        player.words.push(FoundWord { word, points });
+        self.players[seat].words.push(FoundWord {
+            word: word.clone(),
+            points: 0,
+        });
         self.recent_activity.push(RecentFind {
             player: player_name,
-            points,
+            word: word.clone(),
+            points: 0,
             word_length,
             at_ms: epoch_ms(),
         });
-        Ok(points)
+        self.recalculate_scores();
+        let points = self.players[seat]
+            .words
+            .iter()
+            .find(|found| found.word == word)
+            .map(|found| found.points)
+            .unwrap_or(0);
+        let finders = self
+            .players
+            .iter()
+            .filter(|player| player.words.iter().any(|found| found.word == word))
+            .count();
+        Ok(SubmissionResult {
+            points,
+            shared_cancelled: self.cancel_shared_words && finders > 1,
+            unique_bonus: self.mode == Mode::Netflix && finders == 1 && self.players.len() > 1,
+        })
     }
 
     pub fn to_client_state(&self, my_seat: usize) -> ClientState {
@@ -303,7 +343,9 @@ impl GameState {
                 Phase::Playing => "playing",
                 Phase::GameOver => "game_over",
             },
-            mode: self.mode.clone(),
+            mode: self.mode,
+            board_size: self.board_size,
+            cancel_shared_words: self.cancel_shared_words,
             board: self.board.clone(),
             duration_secs: self.duration_secs,
             ends_at_ms: self.ends_at_ms,
@@ -346,7 +388,13 @@ impl GameState {
         let possible_words: Vec<_> = words::possible_words(board)
             .into_iter()
             .map(|word| FoundWord {
-                points: base_points(&word),
+                points: score_word(
+                    self.mode,
+                    &word,
+                    1,
+                    self.cancel_shared_words,
+                    self.players.len() > 1,
+                ),
                 word,
             })
             .collect();
@@ -359,15 +407,63 @@ impl GameState {
         let cutoff = epoch_ms().saturating_sub(15_000);
         self.recent_activity.retain(|find| find.at_ms >= cutoff);
     }
+
+    fn recalculate_scores(&mut self) {
+        let mut finder_counts: HashMap<String, usize> = HashMap::new();
+        for player in &self.players {
+            for found in &player.words {
+                *finder_counts.entry(found.word.clone()).or_default() += 1;
+            }
+        }
+        let multiplayer = self.players.len() > 1;
+        for player in &mut self.players {
+            for found in &mut player.words {
+                found.points = score_word(
+                    self.mode,
+                    &found.word,
+                    *finder_counts.get(&found.word).unwrap_or(&1),
+                    self.cancel_shared_words,
+                    multiplayer,
+                );
+            }
+            player.score = player.words.iter().map(|found| found.points).sum();
+        }
+        for find in &mut self.recent_activity {
+            find.points = score_word(
+                self.mode,
+                &find.word,
+                *finder_counts.get(&find.word).unwrap_or(&1),
+                self.cancel_shared_words,
+                multiplayer,
+            );
+        }
+    }
 }
 
-fn base_points(word: &str) -> u32 {
-    match word.len() {
-        3 | 4 => 1,
-        5 => 2,
-        6 => 3,
-        7 => 5,
-        _ => 11,
+fn score_word(
+    mode: Mode,
+    word: &str,
+    finder_count: usize,
+    cancel_shared_words: bool,
+    multiplayer: bool,
+) -> u32 {
+    if cancel_shared_words && finder_count > 1 {
+        return 0;
+    }
+    let base = match mode {
+        Mode::Classic => match word.len() {
+            3 | 4 => 1,
+            5 => 2,
+            6 => 3,
+            7 => 5,
+            _ => 11,
+        },
+        Mode::Netflix => word.len().saturating_sub(2) as u32,
+    };
+    if mode == Mode::Netflix && multiplayer && finder_count == 1 {
+        base * 2
+    } else {
+        base
     }
 }
 
@@ -380,32 +476,52 @@ fn epoch_ms() -> u64 {
 
 fn make_board(size: usize) -> Board {
     let mut rng = thread_rng();
-    let distribution: Vec<char> = "EEEEEEEEEEEEAAAAAAAAAIIIIIIIIOOOOOOOONNNNNNRRRRRRTTTTTTLLLLSSSSUUUUDDDDGGGBBCCMMPPFFHHVVWWYYKJXZ".chars().collect();
-    let mut letters: Vec<String> = (0..size * size)
-        .map(|_| distribution.choose(&mut rng).unwrap().to_string())
-        .collect();
+    const CLASSIC_DICE: [&str; 16] = [
+        "AAEEGN", "ABBJOO", "ACHOPS", "AFFKPS", "AOOTTW", "CIMOTU", "DEILRX", "DELRVY", "DISTTY",
+        "EEGHNW", "EEINSU", "EHRTVW", "EIOSST", "ELRTTY", "HIMNQU", "HLNNRZ",
+    ];
+    let mut letters: Vec<String> = if size == 4 {
+        CLASSIC_DICE
+            .iter()
+            .map(|die| die.as_bytes().choose(&mut rng).copied().unwrap() as char)
+            .map(tile_for_letter)
+            .collect()
+    } else {
+        let distribution: Vec<char> = "EEEEEEEEEEEEAAAAAAAAAIIIIIIIIOOOOOOOONNNNNNRRRRRRTTTTTTLLLLSSSSUUUUDDDDGGGBBCCMMPPFFHHVVWWYYKJXZ".chars().collect();
+        (0..size * size)
+            .map(|_| *distribution.choose(&mut rng).unwrap())
+            .map(tile_for_letter)
+            .collect()
+    };
     letters.shuffle(&mut rng);
     Board { size, letters }
 }
 
+fn tile_for_letter(letter: char) -> String {
+    if letter == 'Q' {
+        "QU".to_string()
+    } else {
+        letter.to_string()
+    }
+}
+
 fn can_trace(board: &Board, word: &str) -> bool {
-    let chars: Vec<char> = word.chars().collect();
     let mut used = vec![false; board.letters.len()];
     for start in 0..board.letters.len() {
-        if board.letters[start].chars().next() == Some(chars[0])
-            && trace_from(board, &chars, 0, start, &mut used)
-        {
+        if trace_from(board, word, 0, start, &mut used) {
             return true;
         }
     }
     false
 }
 
-fn trace_from(board: &Board, chars: &[char], pos: usize, index: usize, used: &mut [bool]) -> bool {
-    if used[index] || board.letters[index].chars().next() != Some(chars[pos]) {
+fn trace_from(board: &Board, word: &str, pos: usize, index: usize, used: &mut [bool]) -> bool {
+    let tile = board.letters[index].as_str();
+    if used[index] || !word[pos..].starts_with(tile) {
         return false;
     }
-    if pos == chars.len() - 1 {
+    let next_pos = pos + tile.len();
+    if next_pos == word.len() {
         return true;
     }
     used[index] = true;
@@ -420,7 +536,7 @@ fn trace_from(board: &Board, chars: &[char], pos: usize, index: usize, used: &mu
             let nc = col as i32 + dc;
             if nr >= 0 && nr < board.size as i32 && nc >= 0 && nc < board.size as i32 {
                 let next = nr as usize * board.size + nc as usize;
-                if trace_from(board, chars, pos + 1, next, used) {
+                if trace_from(board, word, next_pos, next, used) {
                     used[index] = false;
                     return true;
                 }
@@ -435,6 +551,10 @@ fn trace_from(board: &Board, chars: &[char], pos: usize, index: usize, used: &mu
 mod tests {
     use super::*;
 
+    fn start_game(game: &mut GameState, seat: usize, mode: Mode, cancel_shared_words: bool) {
+        game.start(seat, mode, 4, 60, cancel_shared_words).unwrap();
+    }
+
     #[test]
     fn traces_diagonal_and_rejects_reused_tiles() {
         let board = Board {
@@ -446,15 +566,25 @@ mod tests {
     }
 
     #[test]
+    fn qu_tile_consumes_two_letters_without_reusing_a_tile() {
+        let board = Board {
+            size: 2,
+            letters: vec!["QU".into(), "I".into(), "T".into(), "S".into()],
+        };
+        assert!(can_trace(&board, "QUIT"));
+        assert!(!can_trace(&board, "QIT"));
+    }
+
+    #[test]
     fn accepted_word_scores_and_duplicates_are_rejected() {
         let mut game = GameState::new(2);
         let (seat, _) = game.join("Tester").unwrap();
-        game.start(seat, Mode::Blitz).unwrap();
+        start_game(&mut game, seat, Mode::Classic, false);
         game.board = Some(Board {
             size: 2,
             letters: vec!["S".into(), "U".into(), "E".into(), "X".into()],
         });
-        assert_eq!(game.submit_word(seat, "sue").unwrap(), 1);
+        assert_eq!(game.submit_word(seat, "sue").unwrap().points, 1);
         assert!(matches!(
             game.submit_word(seat, "SUE"),
             Err(ActionError::DuplicateWord)
@@ -467,14 +597,14 @@ mod tests {
     fn accepted_words_use_standard_points_without_a_combo_bonus() {
         let mut game = GameState::new(1);
         let (seat, _) = game.join("Tester").unwrap();
-        game.start(seat, Mode::Blitz).unwrap();
+        start_game(&mut game, seat, Mode::Classic, false);
         game.board = Some(Board {
             size: 2,
             letters: vec!["A".into(), "L".into(), "E".into(), "T".into()],
         });
-        assert_eq!(game.submit_word(seat, "ALE").unwrap(), 1);
-        assert_eq!(game.submit_word(seat, "LEA").unwrap(), 1);
-        assert_eq!(game.submit_word(seat, "LET").unwrap(), 1);
+        assert_eq!(game.submit_word(seat, "ALE").unwrap().points, 1);
+        assert_eq!(game.submit_word(seat, "LEA").unwrap().points, 1);
+        assert_eq!(game.submit_word(seat, "LET").unwrap().points, 1);
         assert_eq!(game.players[seat].score, 3);
         assert_eq!(game.recent_activity.len(), 3);
     }
@@ -484,7 +614,7 @@ mod tests {
         let mut game = GameState::new(2);
         let (seat, _) = game.join("Tester").unwrap();
         let (other_seat, _) = game.join("Wife").unwrap();
-        game.start(seat, Mode::Blitz).unwrap();
+        start_game(&mut game, seat, Mode::Classic, false);
         game.board = Some(Board {
             size: 2,
             letters: vec!["S".into(), "U".into(), "E".into(), "X".into()],
@@ -498,6 +628,73 @@ mod tests {
         assert_eq!(client.my_words[0].points, 1);
         assert_eq!(client.players[0].words.as_ref().unwrap()[0].word, "SUE");
         assert_eq!(client.players[1].words.as_ref().unwrap()[0].points, 1);
+    }
+
+    #[test]
+    fn shared_word_cancellation_recalculates_every_players_score() {
+        let mut game = GameState::new(2);
+        let (first, _) = game.join("Luke").unwrap();
+        let (second, _) = game.join("Wife").unwrap();
+        start_game(&mut game, first, Mode::Classic, true);
+        game.board = Some(Board {
+            size: 2,
+            letters: vec!["S".into(), "U".into(), "E".into(), "X".into()],
+        });
+
+        assert_eq!(game.submit_word(first, "SUE").unwrap().points, 1);
+        let result = game.submit_word(second, "SUE").unwrap();
+
+        assert!(result.shared_cancelled);
+        assert_eq!(result.points, 0);
+        assert_eq!(game.players[first].score, 0);
+        assert_eq!(game.players[second].score, 0);
+        assert_eq!(game.players[first].words[0].points, 0);
+    }
+
+    #[test]
+    fn netflix_unique_bonus_becomes_base_points_when_word_is_shared() {
+        let mut game = GameState::new(2);
+        let (first, _) = game.join("Luke").unwrap();
+        let (second, _) = game.join("Wife").unwrap();
+        start_game(&mut game, first, Mode::Netflix, false);
+        game.board = Some(Board {
+            size: 2,
+            letters: vec!["S".into(), "U".into(), "E".into(), "X".into()],
+        });
+
+        let unique = game.submit_word(first, "SUE").unwrap();
+        assert!(unique.unique_bonus);
+        assert_eq!(unique.points, 2);
+
+        let shared = game.submit_word(second, "SUE").unwrap();
+        assert!(!shared.unique_bonus);
+        assert_eq!(shared.points, 1);
+        assert_eq!(game.players[first].score, 1);
+        assert_eq!(game.players[second].score, 1);
+    }
+
+    #[test]
+    fn netflix_points_follow_the_published_length_curve() {
+        assert_eq!(score_word(Mode::Netflix, "CAT", 1, false, false), 1);
+        assert_eq!(score_word(Mode::Netflix, "WORD", 1, false, false), 2);
+        assert_eq!(score_word(Mode::Netflix, "FIVES", 1, false, false), 3);
+        assert_eq!(score_word(Mode::Netflix, "LONGER", 1, false, false), 4);
+    }
+
+    #[test]
+    fn validates_configurable_board_and_timer() {
+        let mut game = GameState::new(1);
+        let (seat, _) = game.join("Tester").unwrap();
+        game.start(seat, Mode::Netflix, 6, 120, false).unwrap();
+        assert_eq!(game.board_size, 6);
+        assert_eq!(game.board.as_ref().unwrap().letters.len(), 36);
+        assert_eq!(game.duration_secs, 120);
+        let mut invalid = GameState::new(1);
+        let (invalid_seat, _) = invalid.join("Tester").unwrap();
+        assert!(matches!(
+            invalid.start(invalid_seat, Mode::Classic, 7, 180, true),
+            Err(ActionError::InvalidSettings)
+        ));
     }
 
     #[test]
